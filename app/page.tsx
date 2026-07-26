@@ -5,6 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 type UnitKind = "sword" | "bow" | "mage" | "guard";
 type Unit = { id: number; kind: UnitKind; level: number };
 type Enemy = { id: number; hp: number; maxHp: number; progress: number; kind: "goblin" | "wolf" | "troll" };
+type VKUser = { first_name: string; photo_100?: string };
+type VKBridge = { send: (method: string, params?: Record<string, unknown>) => Promise<unknown> };
+
+declare global {
+  interface Window {
+    vkBridge?: VKBridge;
+  }
+}
 
 const UNIT_DATA: Record<UnitKind, { icon: string; name: string; color: string; power: number }> = {
   sword: { icon: "⚔️", name: "Ратник", color: "#e66f3f", power: 7 },
@@ -43,8 +51,10 @@ export default function Home() {
   const [sound, setSound] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [victory, setVictory] = useState(false);
+  const [vkUser, setVkUser] = useState<VKUser | null>(null);
   const nextId = useRef(20);
   const battleTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bridgeRef = useRef<VKBridge | null>(null);
 
   const totalPower = useMemo(
     () => units.reduce((sum, unit) => sum + (unit ? UNIT_DATA[unit.kind].power * 2 ** (unit.level - 1) : 0), 0),
@@ -52,21 +62,58 @@ export default function Home() {
   );
 
   useEffect(() => {
-    const saved = localStorage.getItem("druzhina-save-v1");
-    if (!saved) return;
-    try {
-      const data = JSON.parse(saved);
-      if (Array.isArray(data.units)) setUnits(data.units);
-      if (typeof data.coins === "number") setCoins(data.coins);
-      if (typeof data.wave === "number") setWave(data.wave);
-      if (typeof data.castleHp === "number") setCastleHp(data.castleHp);
-    } catch {
-      localStorage.removeItem("druzhina-save-v1");
+    const applySave = (saved: string | null | undefined) => {
+      if (!saved) return;
+      try {
+        const data = JSON.parse(saved);
+        if (Array.isArray(data.units)) setUnits(data.units);
+        if (typeof data.coins === "number") setCoins(data.coins);
+        if (typeof data.wave === "number") setWave(data.wave);
+        if (typeof data.castleHp === "number") setCastleHp(data.castleHp);
+      } catch {
+        localStorage.removeItem("druzhina-save-v1");
+      }
+    };
+
+    applySave(localStorage.getItem("druzhina-save-v1"));
+
+    const connectVK = async () => {
+      if (!window.vkBridge) return;
+      bridgeRef.current = window.vkBridge;
+      try {
+        await window.vkBridge.send("VKWebAppInit");
+        await window.vkBridge.send("VKWebAppSetViewSettings", {
+          status_bar_style: "light",
+          action_bar_color: "#223922",
+          navigation_bar_color: "#223922",
+        });
+        const user = await window.vkBridge.send("VKWebAppGetUserInfo") as VKUser;
+        setVkUser(user);
+        const storage = await window.vkBridge.send("VKWebAppStorageGet", { keys: ["druzhina_save"] }) as { keys?: Array<{ value: string }> };
+        applySave(storage.keys?.[0]?.value);
+      } catch {
+        bridgeRef.current = null;
+      }
+    };
+
+    if (window.vkBridge) {
+      void connectVK();
+      return;
     }
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/@vkontakte/vk-bridge@2.15.0/dist/browser.min.js";
+    script.async = true;
+    script.onload = () => void connectVK();
+    document.head.appendChild(script);
+    return () => script.remove();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("druzhina-save-v1", JSON.stringify({ units, coins, wave, castleHp }));
+    const value = JSON.stringify({ units, coins, wave, castleHp });
+    localStorage.setItem("druzhina-save-v1", value);
+    if (bridgeRef.current && value.length < 4000) {
+      void bridgeRef.current.send("VKWebAppStorageSet", { key: "druzhina_save", value }).catch(() => undefined);
+    }
   }, [units, coins, wave, castleHp]);
 
   const spawnWave = useCallback(() => {
@@ -210,6 +257,12 @@ export default function Home() {
           <div className="resource"><span>💎</span><b>{crystals}</b><button aria-label="Купить кристаллы">+</button></div>
         </div>
         <div className="top-actions">
+          {vkUser && (
+            <div className="vk-player" title={`Игрок: ${vkUser.first_name}`}>
+              {vkUser.photo_100 ? <img src={vkUser.photo_100} alt="" /> : "VK"}
+              <span>{vkUser.first_name}</span>
+            </div>
+          )}
           <button onClick={() => setSound(!sound)} aria-label="Звук">{sound ? "🔊" : "🔇"}</button>
           <button onClick={() => setShowHelp(true)} aria-label="Правила игры">?</button>
         </div>

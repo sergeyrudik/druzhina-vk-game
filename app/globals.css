@@ -92,6 +92,8 @@ button { font: inherit; }
 .resource button:active, .top-actions button:active { transform: translateY(1px); }
 .top-actions { justify-self: end; display: flex; gap: 8px; }
 .top-actions button { background: #445f43; border: 1px solid #789172; }
+.vk-player { height: 32px; display: flex; align-items: center; gap: 6px; padding-right: 8px; border-radius: 18px; background: #1d3325; font-size: 11px; font-weight: 800; }
+.vk-player img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 2px solid #f3c76a; }
 
 .battle-card, .camp-card {
   position: relative; z-index: 2; width: min(100%, 980px); margin: 0 auto 16px;
@@ -224,6 +226,8 @@ h1 span { color: #9a8d6e; font-size: 17px; }
   .resource button { width: 25px; height: 25px; }
   .top-actions button { width: 28px; height: 28px; }
   .top-actions button:first-child { display: none; }
+  .vk-player span { display: none; }
+  .vk-player { padding-right: 0; background: transparent; }
   .battle-card, .camp-card { border-radius: 17px; border-width: 2px; margin-bottom: 9px; }
   .battle-heading { min-height: 60px; padding: 8px 13px; }
   h1 { font-size: 23px; }
