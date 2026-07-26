@@ -127,6 +127,10 @@ https://sergeyrudik-druzhina-vk-game-3412.twc1.net/
 Воронка, целевые метрики, рекламная модель и первые A/B-тесты описаны в
 [docs/PRODUCT_METRICS.md](docs/PRODUCT_METRICS.md).
 
+Готовые тексты, иконки, сниппет, скриншоты и инструкция по заполнению карточки
+VK находятся в [moderation/README.md](moderation/README.md). Проверить размеры
+файлов можно командой `pnpm run moderation:validate`.
+
 ## Работа с релизами
 
 - изменения вносятся отдельной веткой;

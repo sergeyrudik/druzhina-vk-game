@@ -51,6 +51,9 @@ jobs:
       - name: Run unit and production smoke tests
         run: pnpm run test
 
+      - name: Validate VK moderation assets
+        run: pnpm run moderation:validate
+
       - name: Build backup production bundle
         run: pnpm run sites:build
 
