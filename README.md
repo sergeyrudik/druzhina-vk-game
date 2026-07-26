@@ -1,0 +1,1 @@
+# druzhina-vk-game
