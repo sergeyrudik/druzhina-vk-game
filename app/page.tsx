@@ -1,18 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import bridge from "@vkontakte/vk-bridge";
 
 type UnitKind = "sword" | "bow" | "mage" | "guard";
 type Unit = { id: number; kind: UnitKind; level: number };
 type Enemy = { id: number; hp: number; maxHp: number; progress: number; kind: "goblin" | "wolf" | "troll" };
 type VKUser = { first_name: string; photo_100?: string };
 type VKBridge = { send: (method: string, params?: Record<string, unknown>) => Promise<unknown> };
-
-declare global {
-  interface Window {
-    vkBridge?: VKBridge;
-  }
-}
 
 const UNIT_DATA: Record<UnitKind, { icon: string; name: string; color: string; power: number }> = {
   sword: { icon: "⚔️", name: "Ратник", color: "#e66f3f", power: 7 },
@@ -92,10 +87,9 @@ export default function Home() {
     applySave(localStorage.getItem("druzhina-save-v1"));
 
     const connectVK = async () => {
-      if (!window.vkBridge) return;
       try {
-        await window.vkBridge.send("VKWebAppInit");
-        bridgeRef.current = window.vkBridge;
+        await bridge.send("VKWebAppInit");
+        bridgeRef.current = bridge as unknown as VKBridge;
         setVkReady(true);
       } catch {
         bridgeRef.current = null;
@@ -103,7 +97,7 @@ export default function Home() {
         return;
       }
       try {
-        await window.vkBridge.send("VKWebAppSetViewSettings", {
+        await bridge.send("VKWebAppSetViewSettings", {
           status_bar_style: "light",
           action_bar_color: "#223922",
           navigation_bar_color: "#223922",
@@ -112,29 +106,20 @@ export default function Home() {
         // Some desktop VK clients do not support all view settings.
       }
       try {
-        const user = await window.vkBridge.send("VKWebAppGetUserInfo") as VKUser;
+        const user = await bridge.send("VKWebAppGetUserInfo") as VKUser;
         setVkUser(user);
       } catch {
         // The game and ads can work even if profile access is unavailable.
       }
       try {
-        const storage = await window.vkBridge.send("VKWebAppStorageGet", { keys: ["druzhina_save"] }) as { keys?: Array<{ value: string }> };
+        const storage = await bridge.send("VKWebAppStorageGet", { keys: ["druzhina_save"] }) as { keys?: Array<{ value: string }> };
         applySave(storage.keys?.[0]?.value);
       } catch {
         // Fall back to local storage when VK Storage is unavailable.
       }
     };
 
-    if (window.vkBridge) {
-      void connectVK();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://unpkg.com/@vkontakte/vk-bridge@2.15.0/dist/browser.min.js";
-    script.async = true;
-    script.onload = () => void connectVK();
-    document.head.appendChild(script);
-    return () => script.remove();
+    void connectVK();
   }, []);
 
   useEffect(() => {
