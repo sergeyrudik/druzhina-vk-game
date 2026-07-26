@@ -45,9 +45,9 @@ export default function Home() {
   const [wave, setWave] = useState(1);
   const [castleHp, setCastleHp] = useState(100);
   const [enemies, setEnemies] = useState<Enemy[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(0);
   const [running, setRunning] = useState(false);
-  const [message, setMessage] = useState("Объединяй одинаковых бойцов");
+  const [message, setMessage] = useState("Нажми на второго ратника ⚔️");
   const [sound, setSound] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [victory, setVictory] = useState(false);
@@ -222,6 +222,11 @@ export default function Home() {
     setSelected(null);
   };
 
+  const mergeTarget = (index: number) => {
+    if (selected === null || index === selected || !units[selected] || !units[index]) return false;
+    return units[selected]?.kind === units[index]?.kind && units[selected]?.level === units[index]?.level;
+  };
+
   const heal = () => {
     if (crystals < 2 || castleHp >= 100) return;
     setCrystals((value) => value - 2);
@@ -311,12 +316,20 @@ export default function Home() {
       <section className="camp-card">
         <div className="camp-header">
           <div><span className="eyebrow">БОЕВОЙ ЛАГЕРЬ</span><h2>Собери дружину</h2></div>
-          <p>{message}</p>
+          <p className="camp-message">{message}</p>
+        </div>
+        <div className="tutorial-line">
+          <span className="tutorial-number">1</span>
+          <b>Объедини бойцов</b>
+          <span>Выбери двух одинаковых воинов одного уровня</span>
+          <i>→</i>
+          <span className="tutorial-number">2</span>
+          <b>Нажми «В бой!»</b>
         </div>
         <div className="unit-grid">
           {units.map((unit, index) => (
             <button
-              className={`unit-cell ${selected === index ? "selected" : ""} ${unit ? "occupied" : ""}`}
+              className={`unit-cell ${selected === index ? "selected" : ""} ${mergeTarget(index) ? "merge-target" : ""} ${unit ? "occupied" : ""}`}
               key={index}
               onClick={() => chooseCell(index)}
               aria-label={unit ? `${UNIT_DATA[unit.kind].name}, уровень ${unit.level}` : "Свободное место"}
@@ -327,6 +340,7 @@ export default function Home() {
                   <span className="unit-icon">{UNIT_DATA[unit.kind].icon}</span>
                   <span className="level">Ур. {unit.level}</span>
                   <span className="stars">{"★".repeat(unit.level)}</span>
+                  {mergeTarget(index) && <span className="tap-here">НАЖМИ</span>}
                 </>
               ) : <span className="empty-plus">+</span>}
             </button>

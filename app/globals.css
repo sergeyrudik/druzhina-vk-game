@@ -27,7 +27,7 @@ button { font: inherit; }
   min-height: 100dvh;
   position: relative;
   isolation: isolate;
-  padding: 88px 20px 98px;
+  padding: 78px 20px 22px;
   background:
     radial-gradient(circle at 50% 35%, rgba(255,255,255,.6), transparent 33%),
     linear-gradient(#a8d9e5 0 36%, #9bc170 36% 100%);
@@ -114,7 +114,7 @@ h1 span { color: #9a8d6e; font-size: 17px; }
 .power strong { font-size: 22px; color: #b16b27; }
 
 .battlefield {
-  position: relative; height: 240px; overflow: hidden;
+  position: relative; height: 190px; overflow: hidden;
   background:
     linear-gradient(160deg, transparent 0 55%, rgba(116,135,72,.35) 55%),
     linear-gradient(#9fd8e1 0 46%, #87b668 46% 100%);
@@ -162,18 +162,28 @@ h1 span { color: #9a8d6e; font-size: 17px; }
 .castle-health button { border: 0; border-radius: 10px; padding: 6px 9px; color: white; background: #8266d4; font-size: 11px; font-weight: 800; cursor: pointer; }
 .castle-health button:disabled { opacity: .4; }
 
-.camp-card { padding-bottom: 18px; }
+.camp-card { padding-bottom: 12px; }
 .camp-header { display: flex; align-items: end; justify-content: space-between; padding: 14px 20px 10px; background: #f7edcf; border-bottom: 2px dashed #bba97c; }
 .camp-header h2 { font-size: 24px; }
 .camp-header p { margin: 0 0 3px; color: #796c50; font-size: 12px; }
-.unit-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; padding: 15px 20px; }
+.tutorial-line {
+  min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 14px;
+  background: #34563a; color: white; font-size: 12px;
+}
+.tutorial-line > span:not(.tutorial-number) { color: #dce8d4; }
+.tutorial-line i { color: #f3c76a; font-size: 20px; font-style: normal; }
+.tutorial-number { width: 23px; height: 23px; display: inline-grid; place-items: center; flex: 0 0 23px; border-radius: 50%; background: #e0a73d; color: #3d331f; font-weight: 900; }
+.unit-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; padding: 10px 20px; }
 .unit-cell {
   position: relative; min-width: 0; aspect-ratio: 1; border: 2px dashed #c4b489; border-radius: 16px; background: #eee4c8; color: var(--ink); cursor: pointer;
-  overflow: hidden; transition: transform .15s, border-color .15s, box-shadow .15s;
+  max-height: 92px; overflow: hidden; transition: transform .15s, border-color .15s, box-shadow .15s;
 }
 .unit-cell.occupied { border-style: solid; border-color: #9c895e; background: linear-gradient(#fffbed, #e9dab4); box-shadow: inset 0 2px white, 0 3px 5px rgba(60,47,23,.12); }
 .unit-cell:hover { transform: translateY(-2px); }
 .unit-cell.selected { border-color: #e09d2b; box-shadow: 0 0 0 4px rgba(244,183,55,.35); transform: translateY(-3px); }
+.unit-cell.merge-target { border: 3px solid #d95c38; box-shadow: 0 0 0 5px rgba(217,92,56,.25); animation: targetPulse .8s infinite alternate; }
+@keyframes targetPulse { to { transform: translateY(-4px) scale(1.025); box-shadow: 0 0 0 8px rgba(217,92,56,.12); } }
+.tap-here { position: absolute; z-index: 5; right: 3px; top: 3px; padding: 3px 5px; border-radius: 6px; background: #d84f32; color: white; font-size: 8px; font-weight: 900; }
 .unit-aura { position: absolute; width: 80%; height: 80%; left: 10%; top: 10%; border-radius: 50%; opacity: .16; filter: blur(3px); }
 .unit-icon { position: relative; display: block; font-size: clamp(26px, 4vw, 42px); filter: drop-shadow(0 3px 2px rgba(0,0,0,.18)); }
 .level { position: absolute; left: 5px; top: 4px; padding: 2px 5px; background: #314b31; color: white; border-radius: 6px; font-size: 9px; font-weight: 900; }
@@ -196,8 +206,8 @@ h1 span { color: #9a8d6e; font-size: 17px; }
 .fight:active:not(:disabled) { transform: translateY(3px); box-shadow: inset 0 -3px rgba(91,25,16,.25), 0 1px 0 #773025; }
 
 .bottom-nav {
-  position: fixed; z-index: 20; left: 50%; bottom: 12px; transform: translateX(-50%); width: min(calc(100% - 30px), 560px);
-  height: 68px; display: grid; grid-template-columns: repeat(4, 1fr); padding: 5px 8px;
+  position: relative; z-index: 20; left: 50%; bottom: auto; transform: translateX(-50%); width: min(calc(100% - 30px), 560px);
+  height: 62px; display: grid; grid-template-columns: repeat(4, 1fr); padding: 5px 8px; margin-top: 8px;
   background: rgba(35,56,35,.96); border: 2px solid #c79d50; border-radius: 24px; box-shadow: 0 8px 30px rgba(20,39,20,.38); backdrop-filter: blur(12px);
 }
 .bottom-nav button { position: relative; border: 0; border-radius: 16px; background: transparent; color: #d6d7c6; font-size: 10px; font-weight: 800; cursor: pointer; }
@@ -232,7 +242,7 @@ h1 span { color: #9a8d6e; font-size: 17px; }
   .battle-heading { min-height: 60px; padding: 8px 13px; }
   h1 { font-size: 23px; }
   .power strong { font-size: 17px; }
-  .battlefield { height: 205px; }
+  .battlefield { height: 190px; }
   .castle { transform: scale(.78); transform-origin: left bottom; left: 17px; }
   .road { left: 14%; }
   .enemy { bottom: 34px; }
@@ -245,6 +255,8 @@ h1 span { color: #9a8d6e; font-size: 17px; }
   .camp-header { padding: 10px 12px 7px; }
   .camp-header h2 { font-size: 20px; }
   .camp-header p { max-width: 48%; text-align: right; font-size: 9px; }
+  .tutorial-line { justify-content: flex-start; overflow-x: auto; white-space: nowrap; font-size: 10px; }
+  .tutorial-line > span:not(.tutorial-number), .tutorial-line i { display: none; }
   .unit-grid { grid-template-columns: repeat(4, 1fr); gap: 7px; padding: 10px 12px; }
   .unit-cell { border-radius: 12px; }
   .unit-icon { font-size: 31px; }
@@ -253,7 +265,24 @@ h1 span { color: #9a8d6e; font-size: 17px; }
   .fight { grid-row: 1; }
   .fight span { font-size: 20px; }
   .recruit { min-height: 50px !important; }
-  .bottom-nav { bottom: 7px; height: 64px; width: calc(100% - 16px); border-radius: 20px; }
+  .bottom-nav { position: sticky; left: 0; bottom: 7px; transform: none; height: 64px; width: calc(100% - 16px); margin: 8px auto 0; border-radius: 20px; }
+}
+
+@media (min-width: 701px) and (max-height: 900px) {
+  .topbar { height: 58px; }
+  .game-shell { padding-top: 64px; }
+  .battle-heading { min-height: 56px; padding-block: 7px; }
+  .battlefield { height: 150px; }
+  .castle { transform: scale(.78); transform-origin: left bottom; }
+  .enemy { bottom: 31px; }
+  .defenders span { bottom: 28px; }
+  .camp-header { padding-block: 8px 6px; }
+  .camp-header h2 { font-size: 20px; }
+  .unit-cell { max-height: 72px; }
+  .unit-icon { font-size: 31px; }
+  .camp-actions button { min-height: 52px; }
+  .bottom-nav { height: 56px; }
+  .bottom-nav button span { font-size: 20px; }
 }
 
 @media (max-width: 390px) {
