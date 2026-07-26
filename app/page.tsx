@@ -6,16 +6,21 @@ import Link from "next/link";
 import {
   MAX_WAVE,
   UNIT_DATA,
+  canMergeUnits,
   cloneInitialUnits,
   createDefaultSave,
   createWave,
+  getCampaignProfile,
   getLocalDateKey,
   getMaxCastleHp,
   getNextId,
   getRecruitCost,
   getStartingCoins,
   getTotalPower,
+  getUnitPower,
   getUpgradeCost,
+  getWaveBalance,
+  getWaveReward,
   healCastle,
   mergeOrMove,
   migrateSave,
@@ -52,6 +57,29 @@ const INTERSTITIAL_INTERVAL_MS = 3 * 60 * 1000;
 const VK_APP_URL = "https://vk.com/app54694176";
 
 const enemyIcon = { goblin: "👺", wolf: "🐺", troll: "👹" };
+
+const UNIT_ROLES: Record<UnitKind, { title: string; short: string; description: string }> = {
+  sword: {
+    title: "Натиск",
+    short: "сильнее вблизи",
+    description: "Ратники наносят усиленный урон врагам, подошедшим к стенам.",
+  },
+  bow: {
+    title: "Дальний бой",
+    short: "атакует раньше",
+    description: "Лучники начинают обстрел до того, как враги входят в ближний бой.",
+  },
+  mage: {
+    title: "Чародейство",
+    short: "урон по площади",
+    description: "Волхвы задевают магией второго врага в зоне атаки.",
+  },
+  guard: {
+    title: "Защита стен",
+    short: "снижает урон",
+    description: "Стражи уменьшают урон, который прорвавшиеся враги наносят городу.",
+  },
+};
 
 const DAILY_QUESTS: Array<{
   id: string;
@@ -112,12 +140,28 @@ const UPGRADE_DATA: Record<
 };
 
 function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      window.setTimeout(() => reject(new Error("VK Bridge timeout")), timeoutMs);
-    }),
-  ]);
+  return new Promise<T>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error("VK Bridge timeout")), timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
+
+function findMergePair(units: Array<Unit | null>): [number, number] | null {
+  for (let source = 0; source < units.length; source += 1) {
+    for (let target = source + 1; target < units.length; target += 1) {
+      if (canMergeUnits(units[source], units[target])) return [source, target];
+    }
+  }
+  return null;
 }
 
 export default function Home() {
@@ -145,6 +189,8 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [showResources, setShowResources] = useState<"coins" | "crystals" | null>(null);
   const [victory, setVictory] = useState(false);
+  const [defeat, setDefeat] = useState(false);
+  const [showResult, setShowResult] = useState(false);
   const [activeTab, setActiveTab] = useState<GameTab>("campaign");
   const [tutorialStep, setTutorialStep] = useState<0 | 1 | 2>(0);
   const [bossWave, setBossWave] = useState(false);
@@ -161,12 +207,54 @@ export default function Home() {
   const battleTimer = useRef<number | null>(null);
   const bridgeRef = useRef<VKBridge | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const latestSaveRef = useRef<GameSave>(defaults);
   const sessionStartedAt = useRef(0);
   const lastInterstitialAt = useRef(0);
+  const adBusyRef = useRef(false);
+  const interstitialBusyRef = useRef(false);
+  const lastAdCheckAt = useRef(0);
+  const battleLootRef = useRef(0);
+  const cloudSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const modalReturnFocusRef = useRef<HTMLElement | null>(null);
 
   const maxCastleHp = useMemo(() => getMaxCastleHp(upgrades.walls), [upgrades.walls]);
   const totalPower = useMemo(() => getTotalPower(units, upgrades.forge), [units, upgrades.forge]);
+  const campaignProfile = useMemo(() => getCampaignProfile(campaign), [campaign]);
+  const waveBalance = useMemo(() => getWaveBalance(wave, campaign), [campaign, wave]);
+  const combatProfile = useMemo(() => {
+    const byKind = units.reduce<Record<UnitKind, number>>(
+      (totals, unit) => {
+        if (unit) totals[unit.kind] += getUnitPower(unit, upgrades.forge);
+        return totals;
+      },
+      { sword: 0, bow: 0, mage: 0, guard: 0 },
+    );
+    const safePower = Math.max(1, totalPower);
+    const guardRanks = units.reduce(
+      (sum, unit) => sum + (unit?.kind === "guard" ? unit.level : 0),
+      0,
+    );
+    return {
+      byKind,
+      rangedShare: (byKind.bow + byKind.mage) / safePower,
+      mageShare: byKind.mage / safePower,
+      swordShare: byKind.sword / safePower,
+      wallReduction: Math.min(0.42, guardRanks * 0.045),
+    };
+  }, [totalPower, units, upgrades.forge]);
+  const mergePair = findMergePair(units);
+  const selectedUnit = selected === null ? null : units[selected];
+  const recommendedPower = Math.round(
+    21 + wave * 7.5 + (campaignProfile.healthMultiplier - 1) * 32 + (waveBalance.isBossWave ? 15 : 0),
+  );
+  const readiness =
+    totalPower >= recommendedPower * 1.12
+      ? { label: "Преимущество", className: "strong" }
+      : totalPower >= recommendedPower * 0.82
+        ? { label: "Равный бой", className: "even" }
+        : { label: "Высокий риск", className: "danger" };
   const recruitCost = getRecruitCost(wave);
+  const overlayPause = showStart || showSettings || Boolean(showResources) || showHelp || showResult || adBusy;
 
   const playSound = useCallback(
     (kind: "tap" | "merge" | "battle" | "win" | "error") => {
@@ -204,6 +292,28 @@ export default function Home() {
       .catch(() => undefined);
   }, []);
 
+  const persistValue = useCallback(
+    (value: string) => {
+      try {
+        localStorage.setItem(SAVE_KEY, value);
+        localStorage.removeItem(LEGACY_SAVE_KEY);
+      } catch {
+        trackEvent("save_write_error", { source: "local" });
+      }
+      if (!bridgeRef.current || value.length >= 4000) return;
+      cloudSaveQueueRef.current = cloudSaveQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (!bridgeRef.current) return;
+          await bridgeRef.current.send("VKWebAppStorageSet", { key: VK_SAVE_KEY, value });
+        })
+        .catch(() => {
+          trackEvent("save_write_error", { source: "vk" });
+        });
+    },
+    [trackEvent],
+  );
+
   const applySave = useCallback((save: GameSave) => {
     setUnits(save.units);
     setCoins(save.coins);
@@ -218,18 +328,30 @@ export default function Home() {
     setStats(save.stats);
     setDaily(save.daily);
     setRewards(save.rewards);
+    setVictory(save.stats.campaignsWon >= save.campaign);
+    setDefeat(save.castleHp <= 0);
+    setSelected(save.units.findIndex(Boolean) >= 0 ? save.units.findIndex(Boolean) : null);
+    setMessage(
+      save.stats.campaignsWon >= save.campaign
+        ? `Поход ${save.campaign} завершён. Открыта новая глава.`
+        : save.castleHp <= 0
+          ? `Стены разрушены. Дружина готова повторить волну ${save.wave}.`
+          : save.tutorialDone
+            ? `Подготовь дружину к волне ${save.wave}`
+            : "Нажми на второго ратника ⚔️",
+    );
     nextId.current = getNextId(save.units);
   }, []);
 
   const checkRewardAvailability = useCallback(async () => {
     if (!bridgeRef.current) return;
+    lastAdCheckAt.current = Date.now();
     try {
       const response = (await bridgeRef.current.send("VKWebAppCheckNativeAds", {
         ad_format: "reward",
       })) as { result?: boolean };
       setAdAvailable(response.result === true);
       trackEvent("reward_check", { available: response.result === true });
-      if (response.result === true) trackEvent("reward_offer");
     } catch {
       setAdAvailable(false);
       trackEvent("reward_check", { available: false });
@@ -240,12 +362,17 @@ export default function Home() {
     let cancelled = false;
 
     const hydrate = async () => {
-      const localSave =
-        migrateSave(localStorage.getItem(SAVE_KEY)) ?? migrateSave(localStorage.getItem(LEGACY_SAVE_KEY));
+      let localSave: GameSave | null = null;
+      try {
+        localSave =
+          migrateSave(localStorage.getItem(SAVE_KEY)) ?? migrateSave(localStorage.getItem(LEGACY_SAVE_KEY));
+      } catch {
+        // Private browsing and strict WebViews may deny localStorage access.
+      }
       let cloudSave: GameSave | null = null;
 
       try {
-        await promiseWithTimeout(bridge.send("VKWebAppInit"), 1800);
+        await promiseWithTimeout(bridge.send("VKWebAppInit"), 3500);
         if (cancelled) return;
         bridgeRef.current = bridge as unknown as VKBridge;
         setVkReady(true);
@@ -298,36 +425,41 @@ export default function Home() {
   }, [applySave, checkRewardAvailability, trackEvent]);
 
   useEffect(() => {
+    latestSaveRef.current = {
+      version: 2,
+      updatedAt: Date.now(),
+      units,
+      coins,
+      crystals,
+      wave,
+      castleHp,
+      campaign,
+      sound,
+      tutorialDone,
+      upgrades,
+      stats,
+      daily,
+      rewards,
+    };
+  }, [
+    campaign,
+    castleHp,
+    coins,
+    crystals,
+    daily,
+    rewards,
+    sound,
+    stats,
+    tutorialDone,
+    units,
+    upgrades,
+    wave,
+  ]);
+
+  useEffect(() => {
     if (!hydrated) return;
     const timeout = window.setTimeout(() => {
-      const save: GameSave = {
-        version: 2,
-        updatedAt: Date.now(),
-        units,
-        coins,
-        crystals,
-        wave,
-        castleHp,
-        campaign,
-        sound,
-        tutorialDone,
-        upgrades,
-        stats,
-        daily,
-        rewards,
-      };
-      const value = serializeSave(save);
-      try {
-        localStorage.setItem(SAVE_KEY, value);
-        localStorage.removeItem(LEGACY_SAVE_KEY);
-      } catch {
-        trackEvent("save_write_error", { source: "local" });
-      }
-      if (bridgeRef.current && value.length < 4000) {
-        void bridgeRef.current
-          .send("VKWebAppStorageSet", { key: VK_SAVE_KEY, value })
-          .catch(() => trackEvent("save_write_error", { source: "vk" }));
-      }
+      persistValue(serializeSave(latestSaveRef.current));
     }, 280);
     return () => window.clearTimeout(timeout);
   }, [
@@ -340,12 +472,23 @@ export default function Home() {
     rewards,
     sound,
     stats,
-    trackEvent,
+    persistValue,
     tutorialDone,
     units,
     upgrades,
     wave,
   ]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const flush = () => persistValue(serializeSave(latestSaveRef.current));
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flush);
+    };
+  }, [hydrated, persistValue]);
 
   useEffect(() => {
     const now = Date.now();
@@ -357,6 +500,26 @@ export default function Home() {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || daily.date === getLocalDateKey()) return;
+    const resetTimer = window.setTimeout(() => {
+      setDaily({ date: getLocalDateKey(), merge: 0, recruit: 0, wave: 0, claimed: [] });
+    }, 0);
+    return () => window.clearTimeout(resetTimer);
+  }, [clock, daily.date, hydrated]);
+
+  useEffect(() => {
+    if (
+      !vkReady ||
+      adAvailable !== false ||
+      adBusyRef.current ||
+      clock - lastAdCheckAt.current < 60_000
+    ) {
+      return;
+    }
+    void checkRewardAvailability();
+  }, [adAvailable, checkRewardAvailability, clock, vkReady]);
 
   useEffect(() => {
     const handleVisibility = () => setPaused(document.hidden);
@@ -376,13 +539,82 @@ export default function Home() {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setShowHelp(false);
-      setShowSettings(false);
-      setShowResources(null);
+      if (showSettings) setShowSettings(false);
+      else if (showResources) setShowResources(null);
+      else if (showHelp) setShowHelp(false);
+      else if (showResult) setShowResult(false);
+      else if (showStart && hydrated) setShowStart(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, []);
+  }, [hydrated, showHelp, showResources, showResult, showSettings, showStart]);
+
+  useEffect(() => {
+    const overlayOpen = showStart || showSettings || Boolean(showResources) || showHelp || showResult;
+    if (!overlayOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modalReturnFocusRef.current = activeElement;
+    document.body.style.overflow = "hidden";
+    const backgroundElements = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".topbar, .battle-card, .camp-card, .feature-card, .bottom-nav",
+      ),
+    );
+    if (showStart && (showSettings || Boolean(showResources) || showHelp || showResult)) {
+      const startDialog = document.querySelector<HTMLElement>(".start-screen");
+      if (startDialog) backgroundElements.push(startDialog);
+    }
+    backgroundElements.forEach((element) => {
+      element.setAttribute("inert", "");
+      element.setAttribute("aria-hidden", "true");
+    });
+
+    const focusTimer = window.setTimeout(() => {
+      const dialogs = document.querySelectorAll<HTMLElement>("[data-game-dialog='active']");
+      const dialog = dialogs[dialogs.length - 1];
+      const focusable = dialog?.querySelector<HTMLElement>(
+        "button:not(:disabled), a[href], [tabindex]:not([tabindex='-1'])",
+      );
+      focusable?.focus();
+    }, 0);
+
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const dialogs = document.querySelectorAll<HTMLElement>("[data-game-dialog='active']");
+      const dialog = dialogs[dialogs.length - 1];
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), a[href], [tabindex]:not([tabindex='-1'])",
+        ),
+      ).filter((element) => !element.hasAttribute("hidden"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", trapFocus);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", trapFocus);
+      document.body.style.overflow = previousOverflow;
+      backgroundElements.forEach((element) => {
+        element.removeAttribute("inert");
+        element.removeAttribute("aria-hidden");
+      });
+      modalReturnFocusRef.current?.focus();
+      modalReturnFocusRef.current = null;
+    };
+  }, [showHelp, showResources, showResult, showSettings, showStart]);
 
   const incrementDaily = useCallback((field: DailyField) => {
     setDaily((current) => {
@@ -396,14 +628,16 @@ export default function Home() {
   }, []);
 
   const spawnCurrentWave = useCallback(() => {
-    if (running || castleHp <= 0) return;
+    if (running || castleHp <= 0 || victory || stats.campaignsWon >= campaign) return;
     const spawned = createWave(wave, nextId.current, campaign);
     nextId.current = spawned.nextId;
+    battleLootRef.current = 0;
     enemiesRef.current = spawned.enemies;
     setEnemies(spawned.enemies);
     setBossWave(spawned.isBossWave);
     setRunning(true);
     setPaused(false);
+    setDefeat(false);
     setMessage(spawned.isBossWave ? `Босс волны ${wave} выходит на тракт!` : `Волна ${wave} наступает!`);
     setTutorialStep((step) => (step === 0 ? 1 : step));
     playSound("battle");
@@ -413,22 +647,41 @@ export default function Home() {
       power: Math.round(totalPower),
       boss: spawned.isBossWave,
     });
-  }, [campaign, castleHp, playSound, running, totalPower, trackEvent, wave]);
+  }, [campaign, castleHp, playSound, running, stats.campaignsWon, totalPower, trackEvent, victory, wave]);
 
   useEffect(() => {
-    if (!running || paused) return;
+    if (!running || paused || overlayPause) return;
     battleTimer.current = window.setInterval(() => {
       const current = enemiesRef.current;
       if (!current.length) return;
       const damage = Math.max(1, totalPower * 0.12);
-      let hitDone = false;
+      let primaryHit = false;
+      let splashHit = false;
       let earned = 0;
       let wallDamage = 0;
       const next = current
         .map((enemy) => {
-          const inRange = enemy.progress > 13;
-          const hp = inRange && !hitDone ? enemy.hp - damage : enemy.hp;
-          if (inRange && !hitDone) hitDone = true;
+          let hp = enemy.hp;
+          const rangedDamage = enemy.progress > -2 ? damage * combatProfile.rangedShare : 0;
+          const closeDamage =
+            enemy.progress > 13
+              ? damage *
+                (1 - combatProfile.rangedShare) *
+                (1 + (enemy.progress > 55 ? combatProfile.swordShare * 0.3 : 0))
+              : 0;
+          const primaryDamage = rangedDamage + closeDamage;
+          if (!primaryHit && primaryDamage > 0) {
+            hp -= primaryDamage;
+            primaryHit = true;
+          } else if (
+            primaryHit &&
+            !splashHit &&
+            enemy.progress > -2 &&
+            combatProfile.mageShare > 0
+          ) {
+            hp -= damage * combatProfile.mageShare * 0.48;
+            splashHit = true;
+          }
           const speed = enemy.kind === "wolf" ? 2.4 : enemy.kind === "troll" ? 1.1 : 1.55;
           return { ...enemy, hp, progress: enemy.progress + speed };
         })
@@ -438,24 +691,26 @@ export default function Home() {
             return false;
           }
           if (enemy.progress >= 93) {
-            wallDamage += enemy.kind === "troll" ? 26 : enemy.kind === "wolf" ? 8 : 9;
+            const baseWallDamage = enemy.kind === "troll" ? 26 : enemy.kind === "wolf" ? 8 : 9;
+            wallDamage += Math.max(1, Math.round(baseWallDamage * (1 - combatProfile.wallReduction)));
             return false;
           }
           return true;
         });
       enemiesRef.current = next;
       setEnemies(next);
-      if (earned) setCoins((value) => value + earned);
+      if (earned) battleLootRef.current += earned;
       if (wallDamage) setCastleHp((value) => Math.max(0, value - wallDamage));
     }, 420);
     return () => {
       if (battleTimer.current) window.clearInterval(battleTimer.current);
     };
-  }, [paused, running, totalPower]);
+  }, [combatProfile, overlayPause, paused, running, totalPower]);
 
   const maybeShowInterstitial = useCallback(async () => {
     const now = Date.now();
     if (
+      interstitialBusyRef.current ||
       !bridgeRef.current ||
       !tutorialDone ||
       now - sessionStartedAt.current < INTERSTITIAL_INTERVAL_MS ||
@@ -463,6 +718,7 @@ export default function Home() {
     ) {
       return;
     }
+    interstitialBusyRef.current = true;
     try {
       const check = (await bridgeRef.current.send("VKWebAppCheckNativeAds", {
         ad_format: "interstitial",
@@ -471,11 +727,19 @@ export default function Home() {
         trackEvent("interstitial_unavailable", { wave, campaign });
         return;
       }
-      await bridgeRef.current.send("VKWebAppShowNativeAds", { ad_format: "interstitial" });
-      lastInterstitialAt.current = Date.now();
-      trackEvent("interstitial_complete", { wave, campaign });
+      const shown = (await bridgeRef.current.send("VKWebAppShowNativeAds", {
+        ad_format: "interstitial",
+      })) as { result?: boolean };
+      if (shown.result === true) {
+        lastInterstitialAt.current = Date.now();
+        trackEvent("interstitial_complete", { wave, campaign });
+      } else {
+        trackEvent("interstitial_cancelled", { wave, campaign });
+      }
     } catch {
       trackEvent("interstitial_error", { wave, campaign });
+    } finally {
+      interstitialBusyRef.current = false;
     }
   }, [campaign, trackEvent, tutorialDone, wave]);
 
@@ -485,14 +749,19 @@ export default function Home() {
       setRunning(false);
       setBossWave(false);
       if (castleHp <= 0) {
-        setMessage("Город пал. Усиль дружину и попробуй снова.");
+        battleLootRef.current = 0;
+        setDefeat(true);
+        setShowResult(true);
+        setMessage("Город пал, но дружина сохранена. Подготовься и повтори волну.");
         playSound("error");
         trackEvent("wave_fail", { wave, campaign, power: Math.round(totalPower) });
         return;
       }
 
-      const completionReward = 18 + wave * 4;
-      setCoins((value) => value + completionReward);
+      const completionReward = getWaveReward(wave, campaign);
+      const earnedLoot = battleLootRef.current;
+      battleLootRef.current = 0;
+      setCoins((value) => value + completionReward + earnedLoot);
       setStats((current) => ({
         ...current,
         wavesWon: current.wavesWon + 1,
@@ -507,11 +776,12 @@ export default function Home() {
         wave,
         campaign,
         castle_hp: castleHp,
-        reward: completionReward,
+        reward: completionReward + earnedLoot,
       });
 
       if (wave >= MAX_WAVE) {
         setVictory(true);
+        setShowResult(true);
         setCrystals((value) => value + 3);
         setMessage("Все земли спасены!");
         playSound("win");
@@ -519,7 +789,7 @@ export default function Home() {
       } else {
         if (wave % 3 === 0) void maybeShowInterstitial();
         setWave((value) => value + 1);
-        setMessage(`Волна отбита! Получено ${completionReward} монет.`);
+        setMessage(`Волна отбита! Получено ${completionReward + earnedLoot} монет.`);
         playSound("win");
       }
     }, 260);
@@ -616,11 +886,23 @@ export default function Home() {
 
   const mergeTarget = (index: number) => {
     if (selected === null || index === selected || !units[selected] || !units[index]) return false;
-    return (
-      units[selected]?.kind === units[index]?.kind &&
-      units[selected]?.level === units[index]?.level &&
-      (units[index]?.level ?? 4) < 4
+    return canMergeUnits(units[selected], units[index]);
+  };
+
+  const suggestMerge = () => {
+    if (!mergePair) {
+      setMessage("Сейчас нет пары. Призови нового бойца или перестрой дружину.");
+      playSound("error");
+      return;
+    }
+    setSelected(mergePair[0]);
+    const unit = units[mergePair[0]];
+    setMessage(
+      unit
+        ? `Подсказка: объедини двух бойцов «${UNIT_DATA[unit.kind].name}» ${unit.level} уровня`
+        : "Пара найдена",
     );
+    playSound("tap");
   };
 
   const heal = () => {
@@ -645,11 +927,27 @@ export default function Home() {
     setRunning(false);
     setPaused(false);
     setVictory(false);
+    setDefeat(false);
+    setShowResult(false);
     setCampaign(nextCampaign);
     setSelected(0);
     setActiveTab("campaign");
     setMessage(nextCampaign > campaign ? `Поход ${nextCampaign} начинается!` : "Дружина снова у городских стен.");
     trackEvent("campaign_start", { campaign: nextCampaign, retry: nextCampaign === campaign });
+  };
+
+  const retryCurrentWave = () => {
+    setCastleHp(Math.max(1, Math.ceil(maxCastleHp * 0.65)));
+    setEnemies([]);
+    enemiesRef.current = [];
+    battleLootRef.current = 0;
+    setRunning(false);
+    setPaused(false);
+    setDefeat(false);
+    setShowResult(false);
+    setSelected(units.findIndex(Boolean) >= 0 ? units.findIndex(Boolean) : null);
+    setMessage(`Стены восстановлены до 65%. Дружина готова повторить волну ${wave}.`);
+    trackEvent("wave_retry_ready", { wave, campaign });
   };
 
   const resetAllProgress = () => {
@@ -660,11 +958,14 @@ export default function Home() {
     setRunning(false);
     setPaused(false);
     setVictory(false);
+    setDefeat(false);
+    setShowResult(false);
     setShowSettings(false);
     setShowStart(false);
     setSelected(0);
     setActiveTab("campaign");
     setMessage("Новый поход начинается!");
+    persistValue(serializeSave(fresh));
     trackEvent("progress_reset");
   };
 
@@ -679,7 +980,8 @@ export default function Home() {
   }, [adAvailable, clock, rewards]);
 
   const showRewardedAd = async () => {
-    if (!bridgeRef.current || adBusy || rewardBlockedReason) return;
+    if (!bridgeRef.current || adBusyRef.current || adBusy || rewardBlockedReason) return;
+    adBusyRef.current = true;
     setAdBusy(true);
     setAdStatus("");
     trackEvent("reward_start", { wave, campaign, placement: showStart ? "start" : "game" });
@@ -713,6 +1015,7 @@ export default function Home() {
       setAdStatus("Реклама пока недоступна — попробуй позже");
       trackEvent("reward_error", { wave, campaign });
     } finally {
+      adBusyRef.current = false;
       setAdBusy(false);
       window.setTimeout(() => void checkRewardAvailability(), 1200);
     }
@@ -720,6 +1023,11 @@ export default function Home() {
 
   const claimQuest = (questId: string) => {
     const quest = DAILY_QUESTS.find((item) => item.id === questId);
+    if (daily.date !== getLocalDateKey()) {
+      setDaily({ date: getLocalDateKey(), merge: 0, recruit: 0, wave: 0, claimed: [] });
+      setMessage("Наступил новый день — задания обновлены");
+      return;
+    }
     if (!quest || daily.claimed.includes(quest.id) || daily[quest.field] < quest.target) return;
     setDaily((current) => ({ ...current, claimed: [...current.claimed, quest.id] }));
     if (quest.reward.coins) setCoins((value) => value + quest.reward.coins!);
@@ -768,6 +1076,16 @@ export default function Home() {
   };
 
   const startOrContinue = () => {
+    if (victory || stats.campaignsWon >= campaign) {
+      startCampaign(campaign + 1);
+      setShowStart(false);
+      return;
+    }
+    if (defeat || castleHp <= 0) {
+      setShowStart(false);
+      setShowResult(true);
+      return;
+    }
     setShowStart(false);
     playSound("tap");
     trackEvent(wave > 1 || stats.wavesWon > 0 ? "game_resume" : "game_start", { wave, campaign });
@@ -817,14 +1135,32 @@ export default function Home() {
         <>
           <section className="battle-card">
             <div className="battle-heading">
-              <div>
-                <span className="eyebrow">ПОХОД {campaign} · БЕРЁЗОВЫЙ ТРАКТ</span>
+              <div className="battle-copy">
+                <span className="eyebrow">ПОХОД {campaign} · {campaignProfile.title.toUpperCase()}</span>
                 <h1>
                   Волна {wave} <span>/ {MAX_WAVE}</span>
                   {(wave === 5 || wave === MAX_WAVE) && <em className="boss-label">БОСС</em>}
                 </h1>
+                <div className="wave-route" aria-label={`Пройдено волн: ${wave - 1} из ${MAX_WAVE}`}>
+                  {Array.from({ length: MAX_WAVE }, (_, index) => (
+                    <i
+                      className={`${index + 1 < wave ? "done" : ""} ${index + 1 === wave ? "current" : ""} ${index + 1 === 5 || index + 1 === MAX_WAVE ? "boss" : ""}`}
+                      key={index}
+                    />
+                  ))}
+                </div>
               </div>
-              <div className="power"><span>Сила дружины</span><strong>⚡ {Math.round(totalPower)}</strong></div>
+              <div className="power">
+                <span>Сила дружины</span>
+                <strong><span aria-hidden="true">⚡</span> {Math.round(totalPower)}</strong>
+                <em className={`readiness ${readiness.className}`}>{readiness.label}</em>
+              </div>
+            </div>
+
+            <div className="battle-intel" aria-label="Разведка перед волной">
+              <span><b aria-hidden="true">👣</b> Врагов: {waveBalance.enemyCount}</span>
+              <span><b aria-hidden="true">{waveBalance.isBossWave ? "👹" : "🪙"}</b> {waveBalance.isBossWave ? "Впереди босс" : `Награда: ${waveBalance.completionReward}`}</span>
+              <span><b aria-hidden="true">🎯</b> Совет: сила {recommendedPower}+</span>
             </div>
 
             <div className={`battlefield ${paused && running ? "is-paused" : ""}`}>
@@ -850,12 +1186,17 @@ export default function Home() {
                 </div>
               ))}
               {paused && running && <div className="pause-label">ПАУЗА</div>}
-              {!running && <div className="battle-tip" role="status" aria-live="polite">{message}</div>}
+              {!running && <div className="battle-tip">{message}</div>}
               {bossWave && running && <div className="boss-warning">⚠ БОСС НА ТРАКТЕ</div>}
+              {running && (
+                <span className="sr-only" role="status">
+                  {paused || overlayPause ? "Бой приостановлен" : `Идёт волна ${wave}. Врагов осталось: ${enemies.length}`}
+                </span>
+              )}
             </div>
 
             <div className="castle-health">
-              <span>🏰 Стены города</span>
+              <span><span aria-hidden="true">🏰</span> Стены города</span>
               <div
                 className="health-track"
                 role="progressbar"
@@ -867,7 +1208,13 @@ export default function Home() {
                 <i style={{ width: `${Math.max(0, castleHp / maxCastleHp) * 100}%` }} />
               </div>
               <b>{castleHp}/{maxCastleHp}</b>
-              <button onClick={heal} disabled={crystals < 2 || castleHp >= maxCastleHp}>+25 · 💎2</button>
+              <button
+                onClick={heal}
+                disabled={crystals < 2 || castleHp >= maxCastleHp}
+                aria-label="Восстановить 25 прочности за 2 кристалла"
+              >
+                +25 · 💎2
+              </button>
             </div>
           </section>
 
@@ -908,6 +1255,35 @@ export default function Home() {
                 </button>
               ))}
             </div>
+            <div className="unit-inspector">
+              <div>
+                {selectedUnit ? (
+                  <>
+                    <span className="inspector-icon" aria-hidden="true">{UNIT_DATA[selectedUnit.kind].icon}</span>
+                    <span>
+                      <b>{UNIT_DATA[selectedUnit.kind].name} · уровень {selectedUnit.level}</b>
+                      <small title={UNIT_ROLES[selectedUnit.kind].description}>
+                        Сила {Math.round(getUnitPower(selectedUnit, upgrades.forge))} · {UNIT_ROLES[selectedUnit.kind].title}: {UNIT_ROLES[selectedUnit.kind].short}
+                      </small>
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="inspector-icon" aria-hidden="true">☝️</span>
+                    <span><b>Выбери бойца</b><small>Покажем его силу и особую роль</small></span>
+                  </>
+                )}
+              </div>
+              <button onClick={suggestMerge} disabled={running}>
+                {mergePair ? "Подсказать пару" : "Пар пока нет"}
+              </button>
+            </div>
+            <div className="role-bonuses" aria-label="Активные особенности дружины">
+              {combatProfile.byKind.bow > 0 && <span>🏹 Ранний обстрел</span>}
+              {combatProfile.byKind.mage > 0 && <span>✨ Урон по площади</span>}
+              {combatProfile.byKind.sword > 0 && <span>⚔️ Натиск у стен</span>}
+              {combatProfile.byKind.guard > 0 && <span>🛡️ −{Math.round(combatProfile.wallReduction * 100)}% урона стенам</span>}
+            </div>
             <div className="camp-actions">
               <button className="recruit" onClick={buyUnit} disabled={running}>
                 <span className="recruit-icon">⚔</span>
@@ -916,11 +1292,33 @@ export default function Home() {
               </button>
               <button
                 className="fight"
-                onClick={castleHp <= 0 ? () => startCampaign(campaign) : spawnCurrentWave}
-                disabled={running || victory}
+                onClick={
+                  victory
+                    ? () => startCampaign(campaign + 1)
+                    : defeat || castleHp <= 0
+                      ? retryCurrentWave
+                      : spawnCurrentWave
+                }
+                disabled={running}
               >
-                <span>{castleHp <= 0 ? "ПОВТОРИТЬ ПОХОД" : running ? paused ? "ПАУЗА" : "ИДЁТ БОЙ…" : "В БОЙ!"}</span>
-                <small>{castleHp > 0 && !running ? `Награда за волну ${18 + wave * 4} 🪙` : ""}</small>
+                <span>
+                  {victory
+                    ? "СЛЕДУЮЩИЙ ПОХОД"
+                    : defeat || castleHp <= 0
+                      ? "ВОССТАНОВИТЬ СТЕНЫ"
+                      : running
+                        ? paused || overlayPause ? "ПАУЗА" : "ИДЁТ БОЙ…"
+                        : "В БОЙ!"}
+                </span>
+                <small>
+                  {victory
+                    ? `${getCampaignProfile(campaign + 1).title} ждёт`
+                    : defeat || castleHp <= 0
+                      ? "Дружина сохранится · 65% прочности"
+                      : !running
+                        ? `Награда за волну ${getWaveReward(wave, campaign)} 🪙`
+                        : ""}
+                </small>
               </button>
               {vkReady && (
                 <button
@@ -1032,33 +1430,53 @@ export default function Home() {
       )}
 
       <nav className="bottom-nav" aria-label="Разделы игры">
-        <button className={activeTab === "campaign" ? "active" : ""} onClick={() => setActiveTab("campaign")}>
+        <button className={activeTab === "campaign" ? "active" : ""} onClick={() => setActiveTab("campaign")} aria-current={activeTab === "campaign" ? "page" : undefined}>
           <span>⚔️</span>Поход
         </button>
-        <button className={activeTab === "camp" ? "active" : ""} onClick={() => setActiveTab("camp")} disabled={running}>
+        <button className={activeTab === "camp" ? "active" : ""} onClick={() => setActiveTab("camp")} disabled={running} aria-current={activeTab === "camp" ? "page" : undefined}>
           <span>🏕️</span>Лагерь
         </button>
-        <button className={activeTab === "quests" ? "active" : ""} onClick={() => setActiveTab("quests")} disabled={running}>
+        <button className={activeTab === "quests" ? "active" : ""} onClick={() => setActiveTab("quests")} disabled={running} aria-current={activeTab === "quests" ? "page" : undefined}>
           <span>📜</span>Задания{activeQuestCount > 0 && <i>{activeQuestCount}</i>}
         </button>
-        <button className={activeTab === "rating" ? "active" : ""} onClick={() => setActiveTab("rating")} disabled={running}>
+        <button className={activeTab === "rating" ? "active" : ""} onClick={() => setActiveTab("rating")} disabled={running} aria-current={activeTab === "rating" ? "page" : undefined}>
           <span>🏆</span>Итоги
         </button>
       </nav>
 
       {showStart && (
-        <div className="start-screen">
+        <div
+          className="start-screen"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="start-title"
+          data-game-dialog="active"
+        >
           <div className="start-rays" />
           <div className="start-card">
             <div className="start-emblem">Д</div>
             <span className="start-kicker">СКАЗАНИЕ О ДРЕВНИХ ЗЕМЛЯХ</span>
-            <h2>ДРУЖИНА</h2>
+            <h2 id="start-title">ДРУЖИНА</h2>
             <p className="start-subtitle">ЗАЩИТА ГОРОДА</p>
             <div className="start-divider"><i />⚔<i /></div>
-            <p className="start-progress">Поход {campaign} · Волна {wave} из {MAX_WAVE}</p>
+            <p className="start-progress">
+              {victory || stats.campaignsWon >= campaign
+                ? `Открыт поход ${campaign + 1} · ${getCampaignProfile(campaign + 1).title}`
+                : `Поход ${campaign} · ${campaignProfile.title} · Волна ${wave} из ${MAX_WAVE}`}
+            </p>
             <button className="start-play" onClick={startOrContinue} disabled={!hydrated}>
               <span>▶</span>
-              <b>{!hydrated ? "ЗАГРУЗКА…" : wave > 1 || stats.wavesWon > 0 ? "ПРОДОЛЖИТЬ" : "НАЧАТЬ ИГРУ"}</b>
+              <b>
+                {!hydrated
+                  ? "ЗАГРУЗКА…"
+                  : victory || stats.campaignsWon >= campaign
+                    ? `ПОХОД ${campaign + 1}`
+                    : defeat || castleHp <= 0
+                      ? "ВЕРНУТЬСЯ К ДРУЖИНЕ"
+                      : wave > 1 || stats.wavesWon > 0
+                        ? "ПРОДОЛЖИТЬ"
+                        : "НАЧАТЬ ИГРУ"}
+              </b>
             </button>
             <div className="start-secondary">
               <button onClick={() => setShowHelp(true)}><span>📜</span>Как играть</button>
@@ -1082,7 +1500,7 @@ export default function Home() {
 
       {showSettings && (
         <div className="modal-backdrop settings-backdrop" onClick={() => setShowSettings(false)}>
-          <div className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}>
+          <div className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-game-dialog="active" onClick={(event) => event.stopPropagation()}>
             <span className="modal-icon">⚙️</span>
             <h2 id="settings-title">Настройки</h2>
             <button className="setting-row" onClick={() => setSound(!sound)}>
@@ -1095,7 +1513,7 @@ export default function Home() {
               <Link href="/privacy/">Конфиденциальность</Link>
               <Link href="/terms/">Правила сервиса</Link>
             </div>
-            <button className="reset-progress" onClick={() => {
+            <button className="reset-progress" disabled={!hydrated} onClick={() => {
               if (window.confirm("Удалить весь прогресс, улучшения и статистику?")) resetAllProgress();
             }}>Удалить весь прогресс</button>
             <button className="settings-close" onClick={() => setShowSettings(false)}>Готово</button>
@@ -1105,9 +1523,9 @@ export default function Home() {
 
       {showResources && (
         <div className="modal-backdrop" onClick={() => setShowResources(null)}>
-          <div className="modal resource-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+          <div className="modal resource-modal" role="dialog" aria-modal="true" aria-labelledby="resource-title" data-game-dialog="active" onClick={(event) => event.stopPropagation()}>
             <span className="modal-icon">{showResources === "coins" ? "🪙" : "💎"}</span>
-            <h2>{showResources === "coins" ? "Получить монеты" : "Получить кристаллы"}</h2>
+            <h2 id="resource-title">{showResources === "coins" ? "Получить монеты" : "Получить кристаллы"}</h2>
             <p>
               {showResources === "coins"
                 ? "Монеты выдаются за волны, задания и добровольный просмотр рекламы."
@@ -1124,20 +1542,46 @@ export default function Home() {
         </div>
       )}
 
-      {(showHelp || victory) && (
+      {showHelp && (
         <div className="modal-backdrop" onClick={() => setShowHelp(false)}>
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={(event) => event.stopPropagation()}>
-            <span className="modal-icon">{victory ? "🏆" : "🛡️"}</span>
-            <h2 id="help-title">{victory ? "Земли спасены!" : "Как играть"}</h2>
+          <div className="modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" data-game-dialog="active" onClick={(event) => event.stopPropagation()}>
+            <span className="modal-icon" aria-hidden="true">🛡️</span>
+            <h2 id="help-title">Как играть</h2>
+            <ol className="help-steps">
+              <li><b>Собери дружину.</b> Выбирай одинаковых бойцов одного уровня, чтобы объединить их и получить прирост силы.</li>
+              <li><b>Учитывай роли.</b> Лучники стреляют раньше, волхвы бьют по площади, ратники сильнее у стен, а стражи защищают город.</li>
+              <li><b>Подготовься к волне.</b> Сверь силу с советом разведки, лечи стены и нажимай «В бой!».</li>
+              <li><b>Развивай лагерь.</b> Постоянные улучшения и ежедневные задания сохраняются между походами.</li>
+            </ol>
+            <button onClick={() => setShowHelp(false)}>Понятно</button>
+          </div>
+        </div>
+      )}
+
+      {showResult && (victory || defeat) && (
+        <div className="modal-backdrop" onClick={() => setShowResult(false)}>
+          <div className="modal result-modal" role="dialog" aria-modal="true" aria-labelledby="result-title" data-game-dialog="active" onClick={(event) => event.stopPropagation()}>
+            <span className="modal-icon" aria-hidden="true">{victory ? "🏆" : "🔥"}</span>
+            <h2 id="result-title">{victory ? "Земли спасены!" : "Город пал"}</h2>
             <p>
               {victory
-                ? `Поход ${campaign} завершён. Получено 3 кристалла. В следующем походе враги станут на 20% сильнее.`
-                : "Выбери бойца, затем такого же бойца того же уровня — они объединятся. Улучшай лагерь, выполняй задания и отбей десять волн. На пятой и десятой волне приходит босс."}
+                ? `Поход ${campaign} завершён. Получено 3 кристалла. Следующая глава — «${getCampaignProfile(campaign + 1).title}», а награды станут ценнее.`
+                : `Дружина и ресурсы сохранены. Стены можно восстановить до 65% и повторить волну ${wave} без полного сброса похода.`}
             </p>
-            <button onClick={() => {
-              setShowHelp(false);
-              if (victory) startCampaign(campaign + 1);
-            }}>{victory ? `Начать поход ${campaign + 1}` : "Понятно"}</button>
+            <div className="result-actions">
+              <button onClick={victory ? () => startCampaign(campaign + 1) : retryCurrentWave}>
+                {victory ? `Начать поход ${campaign + 1}` : `Повторить волну ${wave}`}
+              </button>
+              <button
+                className="secondary-modal-button"
+                onClick={() => {
+                  setShowResult(false);
+                  if (victory) setActiveTab("rating");
+                }}
+              >
+                {victory ? "Вернуться к итогам" : "Сначала усилить дружину"}
+              </button>
+            </div>
           </div>
         </div>
       )}
