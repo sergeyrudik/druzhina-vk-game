@@ -50,6 +50,8 @@ export default function Home() {
   const [message, setMessage] = useState("Нажми на второго ратника ⚔️");
   const [sound, setSound] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
+  const [showStart, setShowStart] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
   const [victory, setVictory] = useState(false);
   const [vkUser, setVkUser] = useState<VKUser | null>(null);
   const nextId = useRef(20);
@@ -243,6 +245,8 @@ export default function Home() {
     setEnemies([]);
     setRunning(false);
     setVictory(false);
+    setShowSettings(false);
+    setShowStart(false);
     setMessage("Новый поход начинается!");
   };
 
@@ -365,6 +369,48 @@ export default function Home() {
         <button><span>📜</span>Задания<i>3</i></button>
         <button><span>🏆</span>Рейтинг</button>
       </nav>
+
+      {showStart && (
+        <div className="start-screen">
+          <div className="start-rays" />
+          <div className="start-card">
+            <div className="start-emblem">Д</div>
+            <span className="start-kicker">СКАЗАНИЕ О ДРЕВНИХ ЗЕМЛЯХ</span>
+            <h2>ДРУЖИНА</h2>
+            <p className="start-subtitle">ЗАЩИТА ГОРОДА</p>
+            <div className="start-divider"><i />⚔<i /></div>
+            <p className="start-progress">Поход · Волна {wave} из 10</p>
+            <button className="start-play" onClick={() => setShowStart(false)}>
+              <span>▶</span>
+              <b>{wave > 1 ? "ПРОДОЛЖИТЬ" : "НАЧАТЬ ИГРУ"}</b>
+            </button>
+            <div className="start-secondary">
+              <button onClick={() => setShowHelp(true)}><span>📜</span>Как играть</button>
+              <button onClick={() => setShowSettings(true)}><span>⚙️</span>Настройки</button>
+            </div>
+            <small>Объединяй воинов · Защищай город · Стань легендой</small>
+          </div>
+        </div>
+      )}
+
+      {showSettings && (
+        <div className="modal-backdrop settings-backdrop" onClick={() => setShowSettings(false)}>
+          <div className="modal settings-modal" onClick={(event) => event.stopPropagation()}>
+            <span className="modal-icon">⚙️</span>
+            <h2>Настройки</h2>
+            <button className="setting-row" onClick={() => setSound(!sound)}>
+              <span>Звук</span><b>{sound ? "Включён 🔊" : "Выключен 🔇"}</b>
+            </button>
+            <button className="setting-row" onClick={() => { setShowSettings(false); setShowHelp(true); }}>
+              <span>Правила игры</span><b>Открыть →</b>
+            </button>
+            <button className="reset-progress" onClick={() => {
+              if (window.confirm("Начать новый поход? Текущий прогресс будет удалён.")) reset();
+            }}>Начать игру заново</button>
+            <button className="settings-close" onClick={() => setShowSettings(false)}>Готово</button>
+          </div>
+        </div>
+      )}
 
       {(showHelp || victory) && (
         <div className="modal-backdrop" onClick={() => { setShowHelp(false); if (victory) reset(); }}>
