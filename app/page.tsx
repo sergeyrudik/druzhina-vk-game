@@ -54,6 +54,7 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [victory, setVictory] = useState(false);
   const [vkUser, setVkUser] = useState<VKUser | null>(null);
+  const [vkReady, setVkReady] = useState(false);
   const [adBusy, setAdBusy] = useState(false);
   const [adStatus, setAdStatus] = useState("");
   const nextId = useRef(20);
@@ -92,20 +93,35 @@ export default function Home() {
 
     const connectVK = async () => {
       if (!window.vkBridge) return;
-      bridgeRef.current = window.vkBridge;
       try {
         await window.vkBridge.send("VKWebAppInit");
+        bridgeRef.current = window.vkBridge;
+        setVkReady(true);
+      } catch {
+        bridgeRef.current = null;
+        setVkReady(false);
+        return;
+      }
+      try {
         await window.vkBridge.send("VKWebAppSetViewSettings", {
           status_bar_style: "light",
           action_bar_color: "#223922",
           navigation_bar_color: "#223922",
         });
+      } catch {
+        // Some desktop VK clients do not support all view settings.
+      }
+      try {
         const user = await window.vkBridge.send("VKWebAppGetUserInfo") as VKUser;
         setVkUser(user);
+      } catch {
+        // The game and ads can work even if profile access is unavailable.
+      }
+      try {
         const storage = await window.vkBridge.send("VKWebAppStorageGet", { keys: ["druzhina_save"] }) as { keys?: Array<{ value: string }> };
         applySave(storage.keys?.[0]?.value);
       } catch {
-        bridgeRef.current = null;
+        // Fall back to local storage when VK Storage is unavailable.
       }
     };
 
@@ -393,7 +409,7 @@ export default function Home() {
             <span>{castleHp <= 0 ? "НАЧАТЬ ЗАНОВО" : running ? "ИДЁТ БОЙ…" : "В БОЙ!"}</span>
             <small>{castleHp > 0 && !running ? `Награда до ${40 + wave * 12} 🪙` : ""}</small>
           </button>
-          {vkUser && (
+          {vkReady && (
             <button className="rewarded-ad" onClick={showRewardedAd} disabled={adBusy || running}>
               <span>🎬</span>
               <span><b>{adBusy ? "ЗАГРУЗКА…" : "+75 МОНЕТ"}</b><small>за просмотр рекламы</small></span>
@@ -428,7 +444,7 @@ export default function Home() {
               <button onClick={() => setShowHelp(true)}><span>📜</span>Как играть</button>
               <button onClick={() => setShowSettings(true)}><span>⚙️</span>Настройки</button>
             </div>
-            {vkUser && (
+            {vkReady && (
               <button className="start-ad" onClick={showRewardedAd} disabled={adBusy}>
                 🎬 {adBusy ? "Загрузка рекламы…" : "Получить 75 монет за рекламу"}
               </button>
