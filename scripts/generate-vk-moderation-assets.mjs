@@ -54,11 +54,43 @@ await sharp(resolve(root, "public", "og.png"))
   .png({ compressionLevel: 9 })
   .toFile(resolve(output, "big-snippet-1120x630.png"));
 
+const shotLabels = {
+  start: { title: "Дружина", subtitle: "Собери дружину!" },
+  campaign: { title: "Поход", subtitle: "Волны чудищ и боссы" },
+  camp: { title: "Лагерь", subtitle: "Merge воинов и улучшения" },
+  quests: { title: "Задания", subtitle: "Ежедневная защита города" },
+};
+
 for (const name of ["start", "campaign", "camp", "quests"]) {
-  await sharp(resolve(raw, `${name}.jpg`))
-    .resize(1200, 600, { fit: "cover", position: "centre" })
+  const label = shotLabels[name];
+  const plate = Buffer.from(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="1200" viewBox="0 0 600 1200">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#42694b"/>
+        <stop offset="1" stop-color="#173722"/>
+      </linearGradient>
+    </defs>
+    <rect width="600" height="1200" fill="url(#bg)"/>
+    <text x="300" y="90" text-anchor="middle" fill="#ffe29a" font-family="Georgia, serif" font-size="42" font-weight="700">${label.title}</text>
+    <text x="300" y="135" text-anchor="middle" fill="#fff0bb" font-family="Trebuchet MS, sans-serif" font-size="20" font-weight="700">${label.subtitle}</text>
+    <rect x="28" y="170" width="544" height="320" rx="24" fill="#0b1c10" stroke="#e9ad43" stroke-width="4"/>
+    <text x="300" y="560" text-anchor="middle" fill="#efc566" font-family="Trebuchet MS, sans-serif" font-size="18">Дружина — защита города · VK Mini App</text>
+    <text x="300" y="600" text-anchor="middle" fill="#a7c48a" font-family="Trebuchet MS, sans-serif" font-size="16">Вертикальный экран · 600×1200</text>
+    <rect x="60" y="660" width="480" height="420" rx="28" fill="#24442c" stroke="#ffe29a" stroke-width="3"/>
+    <text x="300" y="820" text-anchor="middle" fill="#fff0bb" font-family="Trebuchet MS, sans-serif" font-size="24" font-weight="700">Merge defense</text>
+    <text x="300" y="870" text-anchor="middle" fill="#a7c48a" font-family="Trebuchet MS, sans-serif" font-size="18">отряд · лагерь · волны · задания</text>
+  </svg>`);
+
+  const preview = await sharp(resolve(raw, `${name}.jpg`))
+    .resize(520, 292, { fit: "cover", position: "centre" })
     .jpeg({ quality: 92, mozjpeg: true })
-    .toFile(resolve(output, `screenshot-${name}-1200x600.jpg`));
+    .toBuffer();
+
+  await sharp(plate)
+    .composite([{ input: preview, top: 184, left: 40 }])
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toFile(resolve(output, `screenshot-${name}-600x1200.jpg`));
 }
 
 console.log(`VK moderation assets generated in ${output}`);
