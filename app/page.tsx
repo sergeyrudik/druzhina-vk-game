@@ -54,6 +54,8 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [victory, setVictory] = useState(false);
   const [vkUser, setVkUser] = useState<VKUser | null>(null);
+  const [adBusy, setAdBusy] = useState(false);
+  const [adStatus, setAdStatus] = useState("");
   const nextId = useRef(20);
   const battleTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const bridgeRef = useRef<VKBridge | null>(null);
@@ -62,6 +64,15 @@ export default function Home() {
     () => units.reduce((sum, unit) => sum + (unit ? UNIT_DATA[unit.kind].power * 2 ** (unit.level - 1) : 0), 0),
     [units],
   );
+
+  const showInterstitialAd = useCallback(async () => {
+    if (!bridgeRef.current) return;
+    try {
+      await bridgeRef.current.send("VKWebAppShowNativeAds", { ad_format: "interstitial" });
+    } catch {
+      // Ads may be unavailable before VK monetization is activated.
+    }
+  }, []);
 
   useEffect(() => {
     const applySave = (saved: string | null | undefined) => {
@@ -174,12 +185,13 @@ export default function Home() {
         setVictory(true);
         setMessage("Все земли спасены!");
       } else {
+        if (wave % 3 === 0) void showInterstitialAd();
         setWave((value) => value + 1);
         setMessage("Волна отбита! Усиль дружину.");
       }
     }, 260);
     return () => clearTimeout(timeout);
-  }, [castleHp, enemies.length, running, wave]);
+  }, [castleHp, enemies.length, running, showInterstitialAd, wave]);
 
   const buyUnit = () => {
     const empty = units.findIndex((unit) => !unit);
@@ -248,6 +260,27 @@ export default function Home() {
     setShowSettings(false);
     setShowStart(false);
     setMessage("Новый поход начинается!");
+  };
+
+  const showRewardedAd = async () => {
+    if (!bridgeRef.current || adBusy) return;
+    setAdBusy(true);
+    setAdStatus("");
+    try {
+      const response = await bridgeRef.current.send("VKWebAppShowNativeAds", { ad_format: "reward" }) as { result?: boolean };
+      if (response.result) {
+        setCoins((value) => value + 75);
+        setAdStatus("Награда получена: +75 монет");
+        setMessage("Спасибо за поддержку! Получено 75 монет");
+        void bridgeRef.current.send("VKWebAppTapticNotificationOccurred", { type: "success" }).catch(() => undefined);
+      } else {
+        setAdStatus("Реклама сейчас недоступна");
+      }
+    } catch {
+      setAdStatus("Реклама пока недоступна — попробуй позже");
+    } finally {
+      setAdBusy(false);
+    }
   };
 
   return (
@@ -360,7 +393,14 @@ export default function Home() {
             <span>{castleHp <= 0 ? "НАЧАТЬ ЗАНОВО" : running ? "ИДЁТ БОЙ…" : "В БОЙ!"}</span>
             <small>{castleHp > 0 && !running ? `Награда до ${40 + wave * 12} 🪙` : ""}</small>
           </button>
+          {vkUser && (
+            <button className="rewarded-ad" onClick={showRewardedAd} disabled={adBusy || running}>
+              <span>🎬</span>
+              <span><b>{adBusy ? "ЗАГРУЗКА…" : "+75 МОНЕТ"}</b><small>за просмотр рекламы</small></span>
+            </button>
+          )}
         </div>
+        {adStatus && <p className="ad-status" role="status">{adStatus}</p>}
       </section>
 
       <nav className="bottom-nav" aria-label="Разделы игры">
@@ -388,6 +428,12 @@ export default function Home() {
               <button onClick={() => setShowHelp(true)}><span>📜</span>Как играть</button>
               <button onClick={() => setShowSettings(true)}><span>⚙️</span>Настройки</button>
             </div>
+            {vkUser && (
+              <button className="start-ad" onClick={showRewardedAd} disabled={adBusy}>
+                🎬 {adBusy ? "Загрузка рекламы…" : "Получить 75 монет за рекламу"}
+              </button>
+            )}
+            {adStatus && <p className="start-ad-status" role="status">{adStatus}</p>}
             <small>Объединяй воинов · Защищай город · Стань легендой</small>
           </div>
         </div>

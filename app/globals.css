@@ -204,6 +204,14 @@ h1 span { color: #9a8d6e; font-size: 17px; }
 .fight span { font-family: var(--font-title), Georgia, serif; font-weight: 900; font-size: 22px; letter-spacing: .08em; }
 .fight small { margin-top: 2px; color: #ffdc9b; font-size: 10px; text-shadow: none; }
 .fight:active:not(:disabled) { transform: translateY(3px); box-shadow: inset 0 -3px rgba(91,25,16,.25), 0 1px 0 #773025; }
+.rewarded-ad {
+  grid-column: 1 / -1; min-height: 46px !important; display: flex; align-items: center; justify-content: center; gap: 10px;
+  border: 2px solid #5c4b8e; color: white; background: linear-gradient(#8870ce, #624ba2); box-shadow: inset 0 -4px rgba(45,28,91,.24);
+}
+.rewarded-ad > span:first-child { font-size: 21px; }
+.rewarded-ad b, .rewarded-ad small { display: block; }
+.rewarded-ad small { color: #e3dafb; font-size: 9px; }
+.ad-status { margin: 8px 20px 0; padding: 7px 10px; border-radius: 9px; background: #eee2be; color: #735c35; text-align: center; font-size: 11px; font-weight: 800; }
 
 .bottom-nav {
   position: relative; z-index: 20; left: 50%; bottom: auto; transform: translateX(-50%); width: min(calc(100% - 30px), 560px);
@@ -260,6 +268,9 @@ h1 span { color: #9a8d6e; font-size: 17px; }
 .start-secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 14px; }
 .start-secondary button { height: 46px; border: 2px solid #9d895f; border-radius: 13px; background: rgba(255,251,230,.75); color: #3d4c35; font-size: 12px; font-weight: 900; cursor: pointer; }
 .start-secondary button span { margin-right: 5px; }
+.start-ad { width: 100%; margin-top: 10px; padding: 10px; border: 1px solid #7660ac; border-radius: 12px; background: #7a64b8; color: white; font-size: 11px; font-weight: 900; cursor: pointer; }
+.start-ad:disabled { opacity: .62; }
+.start-ad-status { margin: 8px 0 0; color: #765d35; font-size: 10px; font-weight: 800; }
 .start-card > small { display: block; margin-top: 15px; color: #8d7b5c; font-size: 9px; }
 
 .modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(25,38,24,.7); backdrop-filter: blur(5px); }
