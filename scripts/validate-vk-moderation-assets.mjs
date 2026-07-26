@@ -9,10 +9,10 @@ const expected = {
   "icon-small-150.png": [150, 150],
   "favicon-32.png": [32, 32],
   "big-snippet-1120x630.png": [1120, 630],
-  "screenshot-start-1280x720.jpg": [1280, 720],
-  "screenshot-campaign-1280x720.jpg": [1280, 720],
-  "screenshot-camp-1280x720.jpg": [1280, 720],
-  "screenshot-quests-1280x720.jpg": [1280, 720],
+  "screenshot-start-1200x600.jpg": [1200, 600],
+  "screenshot-campaign-1200x600.jpg": [1200, 600],
+  "screenshot-camp-1200x600.jpg": [1200, 600],
+  "screenshot-quests-1200x600.jpg": [1200, 600],
 };
 
 for (const [filename, [width, height]] of Object.entries(expected)) {

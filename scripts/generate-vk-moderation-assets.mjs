@@ -56,9 +56,9 @@ await sharp(resolve(root, "public", "og.png"))
 
 for (const name of ["start", "campaign", "camp", "quests"]) {
   await sharp(resolve(raw, `${name}.jpg`))
-    .resize(1280, 720, { fit: "cover", position: "centre" })
+    .resize(1200, 600, { fit: "cover", position: "centre" })
     .jpeg({ quality: 92, mozjpeg: true })
-    .toFile(resolve(output, `screenshot-${name}-1280x720.jpg`));
+    .toFile(resolve(output, `screenshot-${name}-1200x600.jpg`));
 }
 
 console.log(`VK moderation assets generated in ${output}`);

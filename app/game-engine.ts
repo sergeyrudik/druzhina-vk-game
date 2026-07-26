@@ -44,6 +44,27 @@ export type RewardLimits = {
   lastRewardAt: number;
 };
 
+export type CampaignProfile = {
+  campaign: number;
+  chapter: number;
+  cycle: number;
+  title: string;
+  healthMultiplier: number;
+  rewardMultiplier: number;
+  extraEnemies: number;
+  wolfChance: number;
+  bossHealthMultiplier: number;
+};
+
+export type WaveBalance = {
+  wave: number;
+  campaign: CampaignProfile;
+  enemyCount: number;
+  isBossWave: boolean;
+  healthMultiplier: number;
+  completionReward: number;
+};
+
 export type GameSave = {
   version: 2;
   updatedAt: number;
@@ -64,6 +85,7 @@ export type GameSave = {
 export const MAX_WAVE = 10;
 export const MAX_UNIT_LEVEL = 4;
 export const BOARD_SIZE = 12;
+export const UNIT_LEVEL_MULTIPLIER = 2.25;
 
 export const UNIT_DATA: Record<UnitKind, { icon: string; name: string; color: string; power: number }> = {
   sword: { icon: "⚔️", name: "Ратник", color: "#e66f3f", power: 7 },
@@ -88,6 +110,21 @@ export const INITIAL_UNITS: Array<Unit | null> = [
 ];
 
 const UNIT_KINDS: UnitKind[] = ["sword", "bow", "mage", "guard"];
+const CHAPTERS = [
+  { title: "Берёзовый тракт", wolfChance: 0.3, bossHealthMultiplier: 1 },
+  { title: "Волчья пуща", wolfChance: 0.58, bossHealthMultiplier: 0.95 },
+  { title: "Каменный перевал", wolfChance: 0.2, bossHealthMultiplier: 1.18 },
+  { title: "Туманные болота", wolfChance: 0.42, bossHealthMultiplier: 1.08 },
+  { title: "Северная застава", wolfChance: 0.27, bossHealthMultiplier: 1.25 },
+] as const;
+
+function safeInteger(value: number, fallback: number, min: number, max: number) {
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
+}
+
+function safeLevel(value: number) {
+  return safeInteger(value, 1, 1, MAX_UNIT_LEVEL);
+}
 
 export function getLocalDateKey(date = new Date()) {
   const year = date.getFullYear();
@@ -126,28 +163,87 @@ export function createDefaultSave(now = Date.now()): GameSave {
   };
 }
 
+export function getUnitPower(unit: Unit, forgeLevel = 0): number {
+  const data = UNIT_DATA[unit.kind];
+  if (!data) return 0;
+  const level = safeLevel(unit.level);
+  const forge = safeInteger(forgeLevel, 0, 0, 5);
+  return data.power * UNIT_LEVEL_MULTIPLIER ** (level - 1) * (1 + forge * 0.08);
+}
+
 export function getTotalPower(units: Array<Unit | null>, forgeLevel = 0): number {
-  const base = units.reduce(
-    (sum, unit) => sum + (unit ? UNIT_DATA[unit.kind].power * 2.25 ** (unit.level - 1) : 0),
-    0,
+  return units.reduce((sum, unit) => sum + (unit ? getUnitPower(unit, forgeLevel) : 0), 0);
+}
+
+export function canMergeUnits(source: Unit | null | undefined, target: Unit | null | undefined): boolean {
+  return Boolean(
+    source &&
+      target &&
+      source.kind === target.kind &&
+      Number.isInteger(source.level) &&
+      Number.isInteger(target.level) &&
+      source.level >= 1 &&
+      source.level === target.level &&
+      target.level < MAX_UNIT_LEVEL,
   );
-  return base * (1 + Math.max(0, forgeLevel) * 0.08);
+}
+
+export function getCampaignProfile(campaign: number): CampaignProfile {
+  const safeCampaign = safeInteger(campaign, 1, 1, 999);
+  const chapterIndex = (safeCampaign - 1) % CHAPTERS.length;
+  const cycle = Math.floor((safeCampaign - 1) / CHAPTERS.length) + 1;
+  const chapter = CHAPTERS[chapterIndex];
+
+  return {
+    campaign: safeCampaign,
+    chapter: chapterIndex + 1,
+    cycle,
+    title: cycle === 1 ? chapter.title : `${chapter.title} · круг ${cycle}`,
+    // Linear growth is readable for players and the cap prevents endless saves
+    // from becoming numerically impossible after a long absence.
+    healthMultiplier: Math.min(3, 1 + (safeCampaign - 1) * 0.2),
+    rewardMultiplier: Math.min(1.75, 1 + (safeCampaign - 1) * 0.08),
+    extraEnemies: Math.min(2, Math.floor((safeCampaign - 1) / 2)),
+    wolfChance: chapter.wolfChance,
+    bossHealthMultiplier: chapter.bossHealthMultiplier,
+  };
+}
+
+export function getWaveReward(wave: number, campaign = 1): number {
+  const safeWave = safeInteger(wave, 1, 1, MAX_WAVE);
+  const profile = getCampaignProfile(campaign);
+  return Math.round((18 + safeWave * 4) * profile.rewardMultiplier);
+}
+
+export function getWaveBalance(wave: number, campaign = 1): WaveBalance {
+  const safeWave = safeInteger(wave, 1, 1, MAX_WAVE);
+  const profile = getCampaignProfile(campaign);
+  const isBossWave = safeWave === 5 || safeWave === MAX_WAVE;
+  return {
+    wave: safeWave,
+    campaign: profile,
+    enemyCount: Math.min(3 + safeWave + profile.extraEnemies, 10),
+    isBossWave,
+    healthMultiplier: profile.healthMultiplier,
+    completionReward: getWaveReward(safeWave, profile.campaign),
+  };
 }
 
 export function getRecruitCost(wave: number): number {
-  return 35 + Math.floor(Math.max(1, wave) / 3) * 5;
+  const safeWave = safeInteger(wave, 1, 1, MAX_WAVE);
+  return 35 + Math.floor(safeWave / 3) * 5;
 }
 
 export function getMaxCastleHp(wallsLevel: number): number {
-  return 100 + Math.max(0, wallsLevel) * 10;
+  return 100 + safeInteger(wallsLevel, 0, 0, 5) * 10;
 }
 
 export function getStartingCoins(treasuryLevel: number): number {
-  return 160 + Math.max(0, treasuryLevel) * 20;
+  return 160 + safeInteger(treasuryLevel, 0, 0, 5) * 20;
 }
 
 export function getUpgradeCost(level: number): number {
-  return 3 + Math.max(0, level) * 2;
+  return 3 + safeInteger(level, 0, 0, 5) * 2;
 }
 
 export function getNextId(units: Array<Unit | null>, enemies: Enemy[] = []): number {
@@ -188,7 +284,7 @@ export function mergeOrMove(
     return { units: result, nextId, outcome: "moved", unit: source };
   }
 
-  if (target.kind === source.kind && target.level === source.level && target.level < MAX_UNIT_LEVEL) {
+  if (canMergeUnits(source, target)) {
     const merged = { ...target, id: nextId, level: target.level + 1 };
     result[targetIndex] = merged;
     result[selected] = null;
@@ -205,28 +301,34 @@ export function createWave(
   nextId: number,
   campaign = 1,
   random: () => number = Math.random,
-): { enemies: Enemy[]; nextId: number; isBossWave: boolean } {
-  const safeWave = Math.min(MAX_WAVE, Math.max(1, Math.round(wave)));
-  const safeCampaign = Math.max(1, Math.round(campaign));
-  const isBossWave = safeWave === 5 || safeWave === MAX_WAVE;
-  const amount = Math.min(3 + safeWave + Math.floor((safeCampaign - 1) / 2), 10);
-  const campaignMultiplier = 1 + (safeCampaign - 1) * 0.2;
+): { enemies: Enemy[]; nextId: number; isBossWave: boolean; chapter: CampaignProfile } {
+  const balance = getWaveBalance(wave, campaign);
+  const safeWave = balance.wave;
+  const safeNextId = safeInteger(nextId, 20, 1, Number.MAX_SAFE_INTEGER - balance.enemyCount);
 
-  const enemies = Array.from({ length: amount }, (_, index): Enemy => {
+  const enemies = Array.from({ length: balance.enemyCount }, (_, index): Enemy => {
     let kind: EnemyKind;
-    if (isBossWave && index === amount - 1) {
+    const randomValue = random();
+    const roll = Number.isFinite(randomValue) ? Math.min(1, Math.max(0, randomValue)) : 0.5;
+    if (balance.isBossWave && index === balance.enemyCount - 1) {
       kind = "troll";
-    } else if (random() < 0.34) {
+    } else if (roll < balance.campaign.wolfChance) {
       kind = "wolf";
     } else {
       kind = "goblin";
     }
     const baseHp = kind === "troll" ? 115 + safeWave * 8 : kind === "wolf" ? 39 : 50;
-    const hp = Math.round(baseHp * (1 + safeWave * 0.13) * campaignMultiplier);
-    return { id: nextId + index, hp, maxHp: hp, progress: -index * 13, kind };
+    const bossMultiplier = kind === "troll" ? balance.campaign.bossHealthMultiplier : 1;
+    const hp = Math.round(baseHp * (1 + safeWave * 0.13) * balance.healthMultiplier * bossMultiplier);
+    return { id: safeNextId + index, hp, maxHp: hp, progress: -index * 13, kind };
   });
 
-  return { enemies, nextId: nextId + enemies.length, isBossWave };
+  return {
+    enemies,
+    nextId: safeNextId + enemies.length,
+    isBossWave: balance.isBossWave,
+    chapter: balance.campaign,
+  };
 }
 
 export function healCastle(

@@ -3,12 +3,21 @@ import test from "node:test";
 
 import {
   MAX_WAVE,
+  UNIT_LEVEL_MULTIPLIER,
+  canMergeUnits,
   cloneInitialUnits,
   createDefaultSave,
   createWave,
+  getCampaignProfile,
+  getMaxCastleHp,
   getNextId,
   getRecruitCost,
+  getStartingCoins,
   getTotalPower,
+  getUnitPower,
+  getUpgradeCost,
+  getWaveBalance,
+  getWaveReward,
   healCastle,
   mergeOrMove,
   migrateSave,
@@ -29,12 +38,47 @@ test("initial units are cloned and have the expected base power", () => {
   assert.equal(second[0].level, 1);
 });
 
+test("every legal merge provides a real power gain", () => {
+  for (const kind of ["sword", "bow", "mage", "guard"]) {
+    for (let level = 1; level < 4; level += 1) {
+      const first = { id: 1, kind, level };
+      const second = { id: 2, kind, level };
+      const before = getUnitPower(first) + getUnitPower(second);
+      const result = mergeOrMove([first, second], 0, 1, 20);
+
+      assert.equal(result.outcome, "merged");
+      assert.ok(
+        getUnitPower(result.unit) > before,
+        `${kind} level ${level} should gain power after merging`,
+      );
+      assert.ok(Math.abs(getUnitPower(result.unit) / getUnitPower(first) - UNIT_LEVEL_MULTIPLIER) < 1e-12);
+    }
+  }
+});
+
+test("merge eligibility is explicit and respects the level cap", () => {
+  const sword = { id: 1, kind: "sword", level: 2 };
+  assert.equal(canMergeUnits(sword, { id: 2, kind: "sword", level: 2 }), true);
+  assert.equal(canMergeUnits(sword, { id: 3, kind: "bow", level: 2 }), false);
+  assert.equal(canMergeUnits(sword, { id: 4, kind: "sword", level: 3 }), false);
+  assert.equal(canMergeUnits({ ...sword, level: 4 }, { id: 5, kind: "sword", level: 4 }), false);
+  assert.equal(canMergeUnits(null, sword), false);
+});
+
 test("recruit cost grows at the configured wave thresholds", () => {
   assert.equal(getRecruitCost(0), 35);
   assert.equal(getRecruitCost(1), 35);
   assert.equal(getRecruitCost(3), 40);
   assert.equal(getRecruitCost(6), 45);
   assert.equal(getRecruitCost(10), 50);
+});
+
+test("balance helpers return finite bounded values for unsafe inputs", () => {
+  assert.equal(getRecruitCost(Number.NaN), 35);
+  assert.equal(getMaxCastleHp(Number.POSITIVE_INFINITY), 100);
+  assert.equal(getStartingCoins(-100), 160);
+  assert.equal(getUpgradeCost(Number.NaN), 3);
+  assert.equal(getUnitPower({ id: 1, kind: "sword", level: Number.NaN }, Number.NaN), 7);
 });
 
 test("next entity id is always greater than saved unit and enemy ids", () => {
@@ -109,6 +153,7 @@ test("boss waves contain one troll and preserve unique sequential ids", () => {
   const result = createWave(5, 50, 1, () => 1);
 
   assert.equal(result.isBossWave, true);
+  assert.equal(result.chapter.title, "Берёзовый тракт");
   assert.equal(result.enemies.length, 8);
   assert.deepEqual(
     result.enemies.map((enemy) => enemy.id),
@@ -120,6 +165,44 @@ test("boss waves contain one troll and preserve unique sequential ids", () => {
   assert.ok(result.enemies.every((enemy) => enemy.hp === enemy.maxHp && enemy.hp > 0));
 });
 
+test("campaign profiles rotate distinct chapters and scale without runaway values", () => {
+  const first = getCampaignProfile(1);
+  const second = getCampaignProfile(2);
+  const sixth = getCampaignProfile(6);
+  const endless = getCampaignProfile(999);
+
+  assert.equal(first.title, "Берёзовый тракт");
+  assert.equal(second.title, "Волчья пуща");
+  assert.notEqual(first.wolfChance, second.wolfChance);
+  assert.equal(second.healthMultiplier, 1.2);
+  assert.equal(sixth.chapter, 1);
+  assert.equal(sixth.cycle, 2);
+  assert.match(sixth.title, /круг 2/);
+  assert.equal(endless.healthMultiplier, 3);
+  assert.equal(endless.rewardMultiplier, 1.75);
+  assert.equal(endless.extraEnemies, 2);
+});
+
+test("wave balance is deterministic and rewards later campaigns", () => {
+  const opening = getWaveBalance(1, 1);
+  const boss = getWaveBalance(5, 3);
+
+  assert.deepEqual(
+    {
+      wave: opening.wave,
+      enemyCount: opening.enemyCount,
+      isBossWave: opening.isBossWave,
+      completionReward: opening.completionReward,
+    },
+    { wave: 1, enemyCount: 4, isBossWave: false, completionReward: 22 },
+  );
+  assert.equal(boss.enemyCount, 9);
+  assert.equal(boss.isBossWave, true);
+  assert.ok(boss.healthMultiplier > opening.healthMultiplier);
+  assert.ok(boss.completionReward > getWaveReward(5, 1));
+  assert.equal(getWaveReward(Number.NaN, Number.NaN), 22);
+});
+
 test("wave and campaign inputs are clamped and scaled predictably", () => {
   const first = createWave(1, 20, 1, () => 0);
   const lateCampaign = createWave(MAX_WAVE + 100, 20, 3, () => 0);
@@ -129,6 +212,15 @@ test("wave and campaign inputs are clamped and scaled predictably", () => {
   assert.equal(lateCampaign.enemies.length, 10);
   assert.equal(lateCampaign.isBossWave, true);
   assert.ok(lateCampaign.enemies[0].hp > first.enemies[0].hp);
+});
+
+test("wave generation sanitizes ids and non-finite random values", () => {
+  const result = createWave(Number.NaN, -50, 2, () => Number.NaN);
+
+  assert.equal(result.enemies[0].id, 1);
+  assert.equal(result.nextId, 5);
+  assert.ok(result.enemies.every((enemy) => enemy.kind === "wolf"));
+  assert.ok(result.enemies.every((enemy) => Number.isFinite(enemy.hp) && enemy.hp > 0));
 });
 
 test("healing spends crystals only when the castle can be healed", () => {
