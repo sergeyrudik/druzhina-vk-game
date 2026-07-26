@@ -31,6 +31,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# local Codex integrations (may reference machine-specific commands)
+.codex/config.toml
+
 # vercel
 .vercel
 
