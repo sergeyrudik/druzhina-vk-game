@@ -51,11 +51,23 @@ jobs:
       - name: Run unit and production smoke tests
         run: pnpm run test
 
+      - name: Build backup production bundle
+        run: pnpm run sites:build
+
       - name: Upload static export
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: druzhina-static-export
           path: out
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload backup production bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: druzhina-sites-bundle
+          path: dist
           if-no-files-found: error
           retention-days: 7
