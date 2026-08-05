@@ -17,7 +17,8 @@ test(
     assert.match(html, /ДРУЖИНА/);
     assert.match(html, /ЗАЩИТА ГОРОДА/);
     assert.match(html, /class=["']start-play["']/);
-    assert.match(html, /ЗАГРУЗКА…/);
+    assert.match(html, /НАЧАТЬ ИГРУ/);
+    assert.doesNotMatch(html, /<button class=["']start-play["'][^>]*disabled/);
     assert.match(html, /Как играть/);
     assert.match(html, /Волна/);
     assert.match(html, /Собери дружину/);

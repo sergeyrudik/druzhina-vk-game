@@ -343,6 +343,14 @@ export default function Home() {
     nextId.current = getNextId(save.units);
   }, []);
 
+  const readLocalSave = useCallback(() => {
+    try {
+      return migrateSave(localStorage.getItem(SAVE_KEY)) ?? migrateSave(localStorage.getItem(LEGACY_SAVE_KEY));
+    } catch {
+      return null;
+    }
+  }, []);
+
   const checkRewardAvailability = useCallback(async () => {
     if (!bridgeRef.current) return;
     lastAdCheckAt.current = Date.now();
@@ -362,13 +370,7 @@ export default function Home() {
     let cancelled = false;
 
     const hydrate = async () => {
-      let localSave: GameSave | null = null;
-      try {
-        localSave =
-          migrateSave(localStorage.getItem(SAVE_KEY)) ?? migrateSave(localStorage.getItem(LEGACY_SAVE_KEY));
-      } catch {
-        // Private browsing and strict WebViews may deny localStorage access.
-      }
+      const localSave = readLocalSave();
       let cloudSave: GameSave | null = null;
 
       try {
@@ -422,7 +424,19 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [applySave, checkRewardAvailability, trackEvent]);
+  }, [applySave, checkRewardAvailability, readLocalSave, trackEvent]);
+
+  useEffect(() => {
+    if (hydrated) return;
+    const fallbackTimer = window.setTimeout(() => {
+      applySave(readLocalSave() ?? createDefaultSave());
+      setVkReady(false);
+      setAdAvailable(false);
+      setHydrated(true);
+      trackEvent("app_open_fallback", { source: "timeout" });
+    }, 5000);
+    return () => window.clearTimeout(fallbackTimer);
+  }, [applySave, hydrated, readLocalSave, trackEvent]);
 
   useEffect(() => {
     latestSaveRef.current = {
@@ -1076,6 +1090,12 @@ export default function Home() {
   };
 
   const startOrContinue = () => {
+    if (!hydrated) {
+      applySave(readLocalSave() ?? createDefaultSave());
+      setVkReady(false);
+      setAdAvailable(false);
+      setHydrated(true);
+    }
     if (victory || stats.campaignsWon >= campaign) {
       startCampaign(campaign + 1);
       setShowStart(false);
@@ -1464,11 +1484,11 @@ export default function Home() {
                 ? `Открыт поход ${campaign + 1} · ${getCampaignProfile(campaign + 1).title}`
                 : `Поход ${campaign} · ${campaignProfile.title} · Волна ${wave} из ${MAX_WAVE}`}
             </p>
-            <button className="start-play" onClick={startOrContinue} disabled={!hydrated}>
+            <button className="start-play" onClick={startOrContinue}>
               <span>▶</span>
               <b>
                 {!hydrated
-                  ? "ЗАГРУЗКА…"
+                  ? "НАЧАТЬ ИГРУ"
                   : victory || stats.campaignsWon >= campaign
                     ? `ПОХОД ${campaign + 1}`
                     : defeat || castleHp <= 0

@@ -13,12 +13,18 @@
 
 * { box-sizing: border-box; }
 
-html, body { margin: 0; min-height: 100%; background: #d8e5cc; }
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: #d8e5cc;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 body {
   color: var(--ink);
   font-family: var(--font-main), Arial, sans-serif;
-  overflow-x: hidden;
 }
 
 button { font: inherit; }
@@ -39,11 +45,16 @@ button:focus-visible, a:focus-visible {
 }
 
 .legal-page {
+  min-height: 100vh;
+  min-height: 100svh;
   min-height: 100dvh;
   padding: 40px 18px;
   background:
     radial-gradient(circle at 50% 0, rgba(255, 255, 255, .72), transparent 38%),
     linear-gradient(#a8d9e5 0 18%, #d8e5cc 55%, #aac78e 100%);
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .legal-card {
@@ -131,6 +142,8 @@ button:focus-visible, a:focus-visible {
 }
 
 .game-shell {
+  min-height: 100vh;
+  min-height: 100svh;
   min-height: 100dvh;
   position: relative;
   isolation: isolate;
@@ -138,7 +151,9 @@ button:focus-visible, a:focus-visible {
   background:
     radial-gradient(circle at 50% 35%, rgba(255,255,255,.6), transparent 33%),
     linear-gradient(#a8d9e5 0 36%, #9bc170 36% 100%);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .game-shell::before {
@@ -397,7 +412,7 @@ h1 span { color: #9a8d6e; font-size: 17px; }
 .bottom-nav i { position: absolute; top: 0; right: 24%; width: 17px; height: 17px; display: grid; place-items: center; border-radius: 50%; background: #bd4431; color: white; font-style: normal; font-size: 9px; }
 
 .start-screen {
-  position: fixed; z-index: 45; inset: 0; display: grid; place-items: center; padding: 54px 20px 28px; overflow-x: hidden; overflow-y: auto;
+  position: fixed; z-index: 45; inset: 0; display: grid; place-items: center; padding: 54px 20px 28px; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
   background:
     linear-gradient(rgba(28,57,37,.18), rgba(20,44,29,.58)),
     radial-gradient(ellipse at 50% 100%, #b9d68c 0 23%, transparent 24%),
