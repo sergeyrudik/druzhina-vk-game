@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import bridge from "@vkontakte/vk-bridge";
+import { createVkBridge } from "./vk-runtime";
 import Link from "next/link";
 import {
   MAX_WAVE,
@@ -198,6 +199,7 @@ export default function Home() {
   const [vkReady, setVkReady] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [adBusy, setAdBusy] = useState(false);
+  const [interstitialBusy, setInterstitialBusy] = useState(false);
   const [adAvailable, setAdAvailable] = useState<boolean | null>(null);
   const [adStatus, setAdStatus] = useState("");
   const [clock, setClock] = useState(0);
@@ -254,7 +256,7 @@ export default function Home() {
         ? { label: "Равный бой", className: "even" }
         : { label: "Высокий риск", className: "danger" };
   const recruitCost = getRecruitCost(wave);
-  const overlayPause = showStart || showSettings || Boolean(showResources) || showHelp || showResult || adBusy;
+  const overlayPause = showStart || showSettings || Boolean(showResources) || showHelp || showResult || adBusy || interstitialBusy;
 
   const playSound = useCallback(
     (kind: "tap" | "merge" | "battle" | "win" | "error") => {
@@ -374,24 +376,25 @@ export default function Home() {
       let cloudSave: GameSave | null = null;
 
       try {
-        await promiseWithTimeout(bridge.send("VKWebAppInit"), 3500);
+        await promiseWithTimeout(bridge.send("VKWebAppInit"), 1800);
         if (cancelled) return;
-        bridgeRef.current = bridge as unknown as VKBridge;
+        bridgeRef.current = createVkBridge(bridge as unknown as VKBridge);
         setVkReady(true);
 
         try {
-          await bridgeRef.current.send("VKWebAppSetViewSettings", {
+          void bridgeRef.current.send("VKWebAppSetViewSettings", {
             status_bar_style: "light",
             action_bar_color: "#223922",
             navigation_bar_color: "#223922",
-          });
+          }).catch(() => undefined);
         } catch {
           // Some desktop VK clients do not support every view setting.
         }
 
         try {
-          const user = (await bridgeRef.current.send("VKWebAppGetUserInfo")) as VKUser;
-          setVkUser(user);
+          void bridgeRef.current.send("VKWebAppGetUserInfo").then((user) => {
+            if (!cancelled) setVkUser(user as VKUser);
+          }).catch(() => undefined);
         } catch {
           // Profile data is optional.
         }
@@ -642,7 +645,7 @@ export default function Home() {
   }, []);
 
   const spawnCurrentWave = useCallback(() => {
-    if (running || castleHp <= 0 || victory || stats.campaignsWon >= campaign) return;
+    if (running || adBusyRef.current || interstitialBusyRef.current || castleHp <= 0 || victory || stats.campaignsWon >= campaign) return;
     const spawned = createWave(wave, nextId.current, campaign);
     nextId.current = spawned.nextId;
     battleLootRef.current = 0;
@@ -725,6 +728,7 @@ export default function Home() {
     const now = Date.now();
     if (
       interstitialBusyRef.current ||
+      adBusyRef.current ||
       !bridgeRef.current ||
       !tutorialDone ||
       now - sessionStartedAt.current < INTERSTITIAL_INTERVAL_MS ||
@@ -733,6 +737,7 @@ export default function Home() {
       return;
     }
     interstitialBusyRef.current = true;
+    setInterstitialBusy(true);
     try {
       const check = (await bridgeRef.current.send("VKWebAppCheckNativeAds", {
         ad_format: "interstitial",
@@ -754,6 +759,7 @@ export default function Home() {
       trackEvent("interstitial_error", { wave, campaign });
     } finally {
       interstitialBusyRef.current = false;
+      setInterstitialBusy(false);
     }
   }, [campaign, trackEvent, tutorialDone, wave]);
 
@@ -994,7 +1000,7 @@ export default function Home() {
   }, [adAvailable, clock, rewards]);
 
   const showRewardedAd = async () => {
-    if (!bridgeRef.current || adBusyRef.current || adBusy || rewardBlockedReason) return;
+    if (!bridgeRef.current || adBusyRef.current || interstitialBusyRef.current || adBusy || rewardBlockedReason) return;
     adBusyRef.current = true;
     setAdBusy(true);
     setAdStatus("");
@@ -1259,7 +1265,7 @@ export default function Home() {
                   className={`unit-cell ${selected === index ? "selected" : ""} ${mergeTarget(index) ? "merge-target" : ""} ${unit ? "occupied" : ""}`}
                   key={index}
                   onClick={() => chooseCell(index)}
-                  disabled={running}
+                  disabled={running || adBusy || interstitialBusy}
                   aria-pressed={selected === index}
                   aria-label={unit ? `${UNIT_DATA[unit.kind].name}, уровень ${unit.level}` : "Свободное место"}
                 >
@@ -1319,7 +1325,7 @@ export default function Home() {
                       ? retryCurrentWave
                       : spawnCurrentWave
                 }
-                disabled={running}
+                disabled={running || adBusy || interstitialBusy}
               >
                 <span>
                   {victory
