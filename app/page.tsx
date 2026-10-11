@@ -1,5 +1,7 @@
 "use client";
 
+import { createSaveSnapshotGuard } from "./save-snapshot-guard";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import bridge from "@vkontakte/vk-bridge";
 import { createAdPolicy } from "./ad-policy";
@@ -226,6 +228,16 @@ export default function Home() {
       },
     });
   }, []);
+  const progressEpochRef = useRef(0);
+  const saveGuardRef = useRef<ReturnType<typeof createSaveSnapshotGuard<GameSave>> | null>(null);
+  const readCurrentRaw = () => { try { return localStorage.getItem(SAVE_KEY); } catch { return null; } };
+  if (saveGuardRef.current === null) {
+    saveGuardRef.current = createSaveSnapshotGuard<GameSave>({
+      storageKey: SAVE_KEY, read: readCurrentRaw, parse: migrateSave, serialize: serializeSave,
+      write: (value) => { try { localStorage.setItem(SAVE_KEY, value); localStorage.removeItem(LEGACY_SAVE_KEY); return true; } catch { return false; } },
+    });
+  }
+  const [saveRenderRevision, setSaveRenderRevision] = useState(0);
   const lastAdCheckAt = useRef(0);
   const battleLootRef = useRef(0);
   const cloudSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -306,29 +318,10 @@ export default function Home() {
       .catch(() => undefined);
   }, []);
 
-  const persistValue = useCallback(
-    (value: string) => {
-      try {
-        localStorage.setItem(SAVE_KEY, value);
-        localStorage.removeItem(LEGACY_SAVE_KEY);
-      } catch {
-        trackEvent("save_write_error", { source: "local" });
-      }
-      if (!bridgeRef.current || value.length >= 4000) return;
-      cloudSaveQueueRef.current = cloudSaveQueueRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          if (!bridgeRef.current) return;
-          await bridgeRef.current.send("VKWebAppStorageSet", { key: VK_SAVE_KEY, value });
-        })
-        .catch(() => {
-          trackEvent("save_write_error", { source: "vk" });
-        });
-    },
-    [trackEvent],
-  );
-
   const applySave = useCallback((save: GameSave) => {
+    latestSaveRef.current = save;
+    progressEpochRef.current += 1;
+    setSaveRenderRevision(saveGuardRef.current!.revision());
     adPolicyRef.current?.seedLastAdAt(save.rewards.lastRewardAt);
     setCommonRewardWait(adPolicyRef.current?.rewardWaitMs() ?? 0);
     setUnits(save.units);
@@ -358,6 +351,47 @@ export default function Home() {
     );
     nextId.current = getNextId(save.units);
   }, []);
+
+  const adoptExternalSave = useCallback((external: GameSave) => {
+    setSaveRenderRevision(saveGuardRef.current!.revision());
+    applySave(external);
+    if (battleTimer.current) window.clearInterval(battleTimer.current);
+    enemiesRef.current = []; battleLootRef.current = 0;
+    setEnemies([]); setRunning(false); setPaused(false); setShowResult(false);
+    setShowStart(true); setShowSettings(false); setShowResources(null); setShowHelp(false);
+  }, [applySave]);
+
+  const syncExternalBeforeAction = useCallback(() => {
+    const external = saveGuardRef.current!.refresh();
+    if (external) adoptExternalSave(external);
+    return Boolean(external);
+  }, [adoptExternalSave]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const syncFromStorage = () => { const external = saveGuardRef.current!.refresh(); if (external) adoptExternalSave(external); };
+    const onStorage = (event: StorageEvent) => { if (event.key === SAVE_KEY || event.key === null) syncFromStorage(); };
+    window.addEventListener("storage", onStorage); syncFromStorage();
+    return () => window.removeEventListener("storage", onStorage);
+  }, [adoptExternalSave, hydrated]);
+
+  const persistValue = useCallback(
+    (value: string) => {
+      void saveGuardRef.current!.persist(JSON.parse(value) as GameSave, saveRenderRevision).then((result) => {
+        if (result.external) adoptExternalSave(result.external);
+        if (!bridgeRef.current || !result.value || result.value.length >= 4000) return;
+        cloudSaveQueueRef.current = cloudSaveQueueRef.current
+          .catch(() => undefined)
+          .then(async () => {
+            if (!bridgeRef.current) return;
+            if (result.localWritten && !saveGuardRef.current!.isCurrentValue(result.value!)) return;
+            await bridgeRef.current.send("VKWebAppStorageSet", { key: VK_SAVE_KEY, value: result.value! });
+          })
+          .catch(() => trackEvent("save_write_error", { source: "vk" }));
+      });
+    },
+    [adoptExternalSave, saveRenderRevision, trackEvent],
+  );
 
   const readLocalSave = useCallback(() => {
     try {
@@ -429,6 +463,8 @@ export default function Home() {
 
       if (cancelled) return;
       const chosen = selectNewestSave(localSave, cloudSave);
+      saveGuardRef.current!.initialize(readCurrentRaw());
+      setSaveRenderRevision(saveGuardRef.current!.revision());
       applySave(chosen ?? createDefaultSave());
       setHydrated(true);
       trackEvent("app_open", {
@@ -661,6 +697,7 @@ export default function Home() {
   }, []);
 
   const spawnCurrentWave = useCallback(() => {
+    if (syncExternalBeforeAction()) return;
     if (running || adBusyRef.current || interstitialBusyRef.current || castleHp <= 0 || victory || stats.campaignsWon >= campaign) return;
     adPolicyRef.current?.startGameplay();
     const spawned = createWave(wave, nextId.current, campaign);
@@ -681,11 +718,13 @@ export default function Home() {
       power: Math.round(totalPower),
       boss: spawned.isBossWave,
     });
-  }, [campaign, castleHp, playSound, running, stats.campaignsWon, totalPower, trackEvent, victory, wave]);
+  }, [campaign, castleHp, playSound, running, stats.campaignsWon, syncExternalBeforeAction, totalPower, trackEvent, victory, wave]);
 
   useEffect(() => {
     if (!running || paused || overlayPause) return;
+    const effectEpoch = progressEpochRef.current;
     battleTimer.current = window.setInterval(() => {
+      if (effectEpoch !== progressEpochRef.current) return;
       const current = enemiesRef.current;
       if (!current.length) return;
       const damage = Math.max(1, totalPower * 0.12);
@@ -755,7 +794,9 @@ export default function Home() {
 
   useEffect(() => {
     if (!running || enemies.length !== 0) return;
+    const effectEpoch = progressEpochRef.current;
     const timeout = window.setTimeout(() => {
+      if (effectEpoch !== progressEpochRef.current) return;
       setRunning(false);
       setBossWave(false);
       if (castleHp <= 0) {
@@ -820,6 +861,7 @@ export default function Home() {
   ]);
 
   const buyUnit = () => {
+    if (syncExternalBeforeAction()) return;
     const empty = units.findIndex((unit) => !unit);
     if (empty < 0) {
       setMessage("Нет свободных мест — объедини бойцов");
@@ -849,6 +891,7 @@ export default function Home() {
   };
 
   const chooseCell = (index: number) => {
+    if (syncExternalBeforeAction()) return;
     if (running) return;
     const target = units[index];
     if (selected === null) {
@@ -901,6 +944,7 @@ export default function Home() {
   };
 
   const suggestMerge = () => {
+    if (syncExternalBeforeAction()) return;
     if (!mergePair) {
       setMessage("Сейчас нет пары. Призови нового бойца или перестрой дружину.");
       playSound("error");
@@ -917,6 +961,7 @@ export default function Home() {
   };
 
   const heal = () => {
+    if (syncExternalBeforeAction()) return;
     const result = healCastle(castleHp, crystals, maxCastleHp);
     if (!result.healed) return;
     setCrystals(result.crystals);
@@ -927,13 +972,18 @@ export default function Home() {
   };
 
   const startCampaign = async (nextCampaign = campaign) => {
+    if (syncExternalBeforeAction()) return;
     if (boundaryPendingRef.current || adPolicyRef.current?.isBusy()) return;
+    const requestEpoch = progressEpochRef.current;
     boundaryPendingRef.current = true;
     try {
       await maybeShowInterstitial();
     } finally {
       boundaryPendingRef.current = false;
     }
+    const external = saveGuardRef.current?.refresh();
+    if (external) adoptExternalSave(external);
+    if (requestEpoch !== progressEpochRef.current) return;
     const freshUnits = cloneInitialUnits();
     setUnits(freshUnits);
     setCoins(getStartingCoins(upgrades.treasury));
@@ -955,6 +1005,7 @@ export default function Home() {
   };
 
   const retryCurrentWave = () => {
+    if (syncExternalBeforeAction()) return;
     setCastleHp((value) => Math.min(maxCastleHp, Math.max(value, 1, Math.ceil(maxCastleHp * 0.65))));
     setEnemies([]);
     enemiesRef.current = [];
@@ -970,7 +1021,10 @@ export default function Home() {
 
   const resetAllProgress = () => {
     if (adPolicyRef.current?.isBusy() || adBusyRef.current || boundaryPendingRef.current) return;
-    const fresh = { ...createDefaultSave(), rewards: refreshRewards(rewards) };
+    const canonical = saveGuardRef.current?.latest();
+    saveGuardRef.current?.initialize(readCurrentRaw(), true);
+    setSaveRenderRevision(saveGuardRef.current!.revision());
+    const fresh = { ...createDefaultSave(), rewards: refreshRewards(canonical?.rewards ?? rewards) };
     applySave(fresh);
     setEnemies([]);
     enemiesRef.current = [];
@@ -984,7 +1038,7 @@ export default function Home() {
     setSelected(0);
     setActiveTab("campaign");
     setMessage("Новый поход начинается!");
-    persistValue(serializeSave(fresh));
+    void saveGuardRef.current!.persist(fresh).then((result) => { if (result.external) adoptExternalSave(result.external); });
     trackEvent("progress_reset");
   };
 
@@ -1001,10 +1055,11 @@ export default function Home() {
   }, [adAvailable, campaign, clock, commonRewardWait, rewards, running, stats.campaignsWon, victory]);
 
   const showRewardedAd = async () => {
+    if (syncExternalBeforeAction()) return;
     if (running) return;
     if (victory || stats.campaignsWon >= campaign) return;
     if (!bridgeRef.current || adBusyRef.current || interstitialBusyRef.current || adBusy || rewardBlockedReason) return;
-    if (!adPolicyRef.current?.beginReward()) {
+    if (!(await adPolicyRef.current?.beginReward())) {
       setAdStatus(`Следующая награда через ${Math.ceil((adPolicyRef.current?.rewardWaitMs() ?? 0) / 60_000)} мин.`);
       return;
     }
@@ -1022,6 +1077,8 @@ export default function Home() {
         return;
       }
       adPolicyRef.current?.finishReward(true);
+      const external = saveGuardRef.current?.refresh();
+      if (external) adoptExternalSave(external);
       const today = getLocalDateKey();
       setCoins((value) => value + REWARD_COINS);
       setRewards((current) => ({
@@ -1051,6 +1108,7 @@ export default function Home() {
   };
 
   const claimQuest = (questId: string) => {
+    if (syncExternalBeforeAction()) return;
     const quest = DAILY_QUESTS.find((item) => item.id === questId);
     if (daily.date !== getLocalDateKey()) {
       setDaily({ date: getLocalDateKey(), merge: 0, recruit: 0, wave: 0, claimed: [] });
@@ -1067,6 +1125,7 @@ export default function Home() {
   };
 
   const buyUpgrade = (key: UpgradeKey) => {
+    if (syncExternalBeforeAction()) return;
     const level = upgrades[key];
     if (level >= 5) return;
     const cost = getUpgradeCost(level);

@@ -54,7 +54,7 @@ function fixture({ response = true, throws = false, lives = 3, completed = false
   const calls = [];
   let resolveShow;
   const storage = new Map();
-  const policy = createAdPolicy({ storageKey: "handler-test", now: () => clock,
+  const policy = createAdPolicy({ settle: async()=>{}, storageKey: "handler-test", now: () => clock,
     storage: { getItem: (k) => storage.get(k) ?? null, setItem: (k,v) => storage.set(k,v) },
     onInterstitialBusyChange: (v) => { state.interstitialBusy = v; },
   });
@@ -67,7 +67,11 @@ function fixture({ response = true, throws = false, lives = 3, completed = false
   } } : null };
   const write = (key) => (value) => { state[key] = typeof value === "function" ? value(state[key]) : value; };
   const noop = () => {};
-  const scope = { ...engine, save: original, rewards: original.rewards, stats: original.stats, units: original.units,
+  const scope = { syncExternalBeforeAction:()=>false, progressEpochRef: {current:0}, latestSaveRef:{current:null},
+    saveGuardRef:{current:{refresh:()=>null,latest:()=>null,initialize(){},revision:()=>0,persist:async()=>({value:null,external:null})}},
+    adoptExternalSave:()=>{}, setSaveRenderRevision:()=>{}, saveRenderRevision:0,
+    readCurrentRaw:()=>null, readStoredValue:()=>null, SAVE_KEY:'single-session-test',
+ ...engine, save: original, rewards: original.rewards, stats: original.stats, units: original.units,
     campaign: original.campaign ?? 1, wave: original.wave ?? 1, upgrades: original.upgrades,
     orders: state.orders, active: 0, picked: [], now: clock, enemies: [], castleHp: 100, totalPower: 100,
     maxCastleHp: 100, victory: completed, tutorialDone: true, vkReady: ready, running: false,
@@ -130,7 +134,7 @@ test(`${game}: actual reward cannot immediately follow an interstitial`, async (
 test(`${game}: duplicate pending reward calls cannot double grant`, async () => {
   const f = fixture({ deferred: true });
   const first = f.reward();
-  await Promise.resolve();
+  await new Promise(resolve=>setImmediate(resolve));
   await f.reward();
   assert.equal(f.calls.filter(c => c.method === "VKWebAppShowNativeAds").length, 1);
   f.resolve(true); await first;
@@ -161,7 +165,7 @@ test(`${game}: new-round mutations wait until pending native advertisement ends`
   const f = fixture({ deferred: true });
   f.policy.startGameplay(); f.advance(AD_INTERVAL_MS);
   const pending = f.boundary();
-  await Promise.resolve(); await Promise.resolve();
+  await new Promise(resolve=>setImmediate(resolve)); await new Promise(resolve=>setImmediate(resolve));
   assert.equal(f.policy.isBusy(), true);
   if (game === "sani") assert.equal(f.state.running, false);
   if (game === "traktir") { assert.equal(f.state.score, 500); assert.equal(f.state.kitchenStarted, undefined); }
@@ -201,7 +205,7 @@ if (game === "druzhina") {
   test("druzhina: actual next-campaign/reset handlers cannot mutate progress while a rewarded video is pending", async () => {
     const f = fixture({ deferred: true });
     const reward = f.reward();
-    await Promise.resolve();
+    await new Promise(resolve=>setImmediate(resolve));
     await f.boundary();
     actualHandler("resetAllProgress", f.scope)();
     assert.equal(f.state.campaign, f.original.campaign);
@@ -253,7 +257,7 @@ if (game === "traktir") {
       const f = fixture({ deferred: true }); f.policy.startGameplay(); f.advance(AD_INTERVAL_MS);
       f.original.stats.served = served;
       actualHandler("pickIngredient", f.scope)("bread");
-      await Promise.resolve(); await Promise.resolve();
+      await new Promise(resolve=>setImmediate(resolve)); await new Promise(resolve=>setImmediate(resolve));
       const expected = (served + 1) % 20 === 0 ? 1 : 0;
       assert.equal(f.calls.filter(c => c.method === "VKWebAppShowNativeAds").length, expected);
       if (expected) {
@@ -301,7 +305,7 @@ if (game === "sani") {
     const f = fixture({ deferred: true }); f.policy.startGameplay(); f.advance(AD_INTERVAL_MS);
     f.state.distance = 999;
     const pending = actualHandler("resetForNewRun", f.scope)();
-    await Promise.resolve(); await Promise.resolve();
+    await new Promise(resolve=>setImmediate(resolve)); await new Promise(resolve=>setImmediate(resolve));
     assert.equal(f.state.distance, 999);
     f.resolve(false); await pending;
     assert.equal(f.state.distance, 0); assert.equal(f.state.running, false);

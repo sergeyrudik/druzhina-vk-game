@@ -64,14 +64,15 @@ function resetAction(scope) {
   return evaluate(handler, scope)();
 }
 function fixture() {
-  const s = { ...engine.createDefaultSave(), save: engine.createDefaultSave(), running: false,
+  const s = { ...engine.createDefaultSave(), save: engine.createDefaultSave(), running: false, showStart: true,
     userPaused: false, backgrounded: false, started: true, hydrated: true, tab: "play", adPending: false,
     interstitialBusy: false, distance: 0, lane: 1, entities: [], messages: [], toasts: [], enemies: [],
     paused: false, overlayPause: false, victory: false, defeat: false, tutorialStep: 0, selected: 0,
     active: 0, picked: [], now: 1_800_000_000_000, orders: [], kitchenActive: true, events: [], ads: 0,
   };
   const timers = [];
-  const refs = { nextId: { current: 20 }, enemiesRef: { current: [] }, battleLootRef: { current: 0 },
+  const refs = { progressEpochRef: { current: 0 }, latestSaveRef: { current: s },
+    saveGuardRef: { current: { latest: () => null, refresh: () => null, initialize() {}, revision: () => 0, persist: async () => ({value:null, external:null}) } }, nextId: { current: 20 }, enemiesRef: { current: [] }, battleLootRef: { current: 0 },
     battleTimer: { current: null }, adPendingRef: { current: false }, adBusyRef: { current: false },
     interstitialBusyRef: { current: false }, boundaryPendingRef: { current: false },
     bridgeRef: { current: null }, adPolicyRef: { current: { isBusy: () => false, startGameplay() {}, maybeInterstitial: async () => false, seedLastAdAt() {}, rewardWaitMs: () => 0 } },
@@ -81,7 +82,7 @@ function fixture() {
   const window = { setInterval: (fn, ms) => { timers.push({ fn, ms, interval: true }); return timers.length; },
     clearInterval: noop, setTimeout: (fn, ms) => { timers.push({ fn, ms, interval: false }); return timers.length; }, clearTimeout: noop };
   function scope() {
-    const x = { ...engine, ...s, ...refs, window, clearInterval: noop,
+    const x = { syncExternalBeforeAction:()=>false, readCurrentRaw:()=>null, readStoredValue:()=>null, SAVE_KEY:"single-session-test", ...engine, ...s, ...refs, window, clearInterval: noop,
       save: s.save, vkReady: s.vkReady ?? false, adAvailable: s.adAvailable ?? false,
       REVIVE_COST_COINS: 12, REWARD_COINS: 75, REWARD_LIVES: 2, MAX_LIVES: 5,
       REWARD_DAILY_LIMIT: 8, REWARD_COOLDOWN_MS: AD_INTERVAL_MS,
@@ -91,7 +92,7 @@ function fixture() {
       setMessage: (v) => { s.message = v; s.messages.push(v); }, setToast: (v) => s.toasts.push(v), showToast: (v) => s.toasts.push(v),
       setAdStatus: noop, setCommonRewardWait: noop, performance: { now: () => s.now, timeOrigin: 0 },
     };
-    for (const name of ["Coins", "Crystals", "Units", "Upgrades", "Daily", "Rewards", "Stats", "Running", "Paused", "UserPaused", "Distance", "Entities", "Lane", "Victory", "Defeat", "ShowResult", "ShowSettings", "ShowStart", "ShowResources", "Sound", "Selected", "ActiveTab", "Enemies", "BossWave", "TutorialDone", "TutorialStep", "Wave", "Campaign", "CastleHp", "Orders", "Picked", "ShakePlate", "Active", "Now", "Started", "Tab", "AdPending", "AdBusy", "Clock", "AdAvailable"]) {
+    for (const name of ["SaveRenderRevision", "Coins", "Crystals", "Units", "Upgrades", "Daily", "Rewards", "Stats", "Running", "Paused", "UserPaused", "Distance", "Entities", "Lane", "Victory", "Defeat", "ShowResult", "ShowSettings", "ShowHelp", "ShowStart", "ShowResources", "Sound", "Selected", "ActiveTab", "Enemies", "BossWave", "TutorialDone", "TutorialStep", "Wave", "Campaign", "CastleHp", "Orders", "Picked", "ShakePlate", "Active", "Now", "Started", "Tab", "AdPending", "AdBusy", "Clock", "AdAvailable"]) {
       const key = name[0].toLowerCase() + name.slice(1);
       x["set" + name] = (v) => { s[key] = typeof v === "function" ? v(s[key]) : v; };
     }
@@ -133,7 +134,7 @@ for (const count of [3, 8]) {
     f.s.coins = 777; f.s.save.coins = 777;
     let clock = now;
     const storage = new Map(); const calls = [];
-    f.refs.adPolicyRef.current = createAdPolicy({ storageKey: "gameplay-reset-quota", now: () => clock,
+    f.refs.adPolicyRef.current = createAdPolicy({ settle: async()=>{}, storageKey: "gameplay-reset-quota", now: () => clock,
       storage: { getItem: k => storage.get(k) ?? null, setItem: (k,v) => storage.set(k,v) } });
     f.refs.adPolicyRef.current.seedLastAdAt(earned.lastRewardAt);
     f.refs.bridgeRef.current = { send: async (method) => { calls.push(method); return { result: true }; } };
@@ -169,7 +170,7 @@ test(`${game} actual ninth reward stays SDK-blocked after reset with elapsed com
   f.s.rewards = { ...rewards }; f.s.save.rewards = { ...rewards };
   f.s.vkReady = true; f.s.adAvailable = true; f.s.clock = now + AD_INTERVAL_MS;
   f.refs.bridgeRef.current = { send: async method => { calls.push(method); return { result: true }; } };
-  f.refs.adPolicyRef.current = createAdPolicy({ storageKey: "ninth-reset-test", now: () => now + AD_INTERVAL_MS,
+  f.refs.adPolicyRef.current = createAdPolicy({ settle: async()=>{}, storageKey: "ninth-reset-test", now: () => now + AD_INTERVAL_MS,
     storage: { getItem: () => null, setItem() {} } });
   f.refs.adPolicyRef.current.seedLastAdAt(rewards.lastRewardAt);
   resetAction(f.scope());

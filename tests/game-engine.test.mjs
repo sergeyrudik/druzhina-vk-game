@@ -51,7 +51,11 @@ for (const result of [true, false, undefined, "true", 1, {}, null, "sdk-error"])
     let rewards = structuredClone(initial.rewards);
     let stats = structuredClone(initial.stats);
     let calls = 0;
-    const scope = {
+    const scope = { syncExternalBeforeAction:()=>false, progressEpochRef: {current:0}, latestSaveRef:{current:null},
+    saveGuardRef:{current:{refresh:()=>null,latest:()=>null,initialize(){},revision:()=>0,persist:async()=>({value:null,external:null})}},
+    adoptExternalSave:()=>{}, setSaveRenderRevision:()=>{}, saveRenderRevision:0,
+    readCurrentRaw:()=>null, readStoredValue:()=>null, SAVE_KEY:'single-session-test',
+
       bridgeRef: { current: { send: async (method) => {
         if (method === "VKWebAppShowNativeAds") {
           calls += 1;
@@ -61,7 +65,7 @@ for (const result of [true, false, undefined, "true", 1, {}, null, "sdk-error"])
         return {};
       } } },
       adBusyRef: { current: false }, interstitialBusyRef: { current: false },
-      adPolicyRef: { current: createAdPolicy({ storageKey: "test:reward", storage: null }) },
+      adPolicyRef: { current: createAdPolicy({ storageKey: "test:reward", settle: async()=>{}, storage: (()=>{const m=new Map();return{getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};})() }) },
       victory: false, running: false, stats: initial.stats,
       adBusy: false, rewardBlockedReason: "", wave: 1, campaign: 1, showStart: false,
       REWARD_COINS: 75, getLocalDateKey,
