@@ -597,7 +597,7 @@ export default function Home() {
     const handleVisibility = () => setPaused(document.hidden);
     const handleBridgeEvent = (event: VKEvent) => {
       if (event.detail?.type === "VKWebAppViewHide") setPaused(true);
-      if (event.detail?.type === "VKWebAppViewRestore") setPaused(false);
+      if (event.detail?.type === "VKWebAppViewRestore") setPaused(document.hidden);
     };
     document.addEventListener("visibilitychange", handleVisibility);
     const activeBridge = bridgeRef.current;

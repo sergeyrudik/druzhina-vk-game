@@ -114,6 +114,25 @@ function fixture() {
 
 function rng(seed) { let word = seed; return () => { word = (Math.imul(word,1664525)+1013904223)>>>0; return word / 2**32; }; }
 
+test('mobile lifecycle: actual VKRestore keeps a hidden document paused and visible restore resumes combat', () => {
+ const f=fixture(); const listeners=new Map(); let bridgeListener=null; let removed=false;
+ const document={hidden:true,addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:(name,fn)=>{assert.equal(listeners.get(name),fn);listeners.delete(name);}};
+ f.refs.bridgeRef.current={subscribe:(fn)=>{bridgeListener=fn;},unsubscribe:(fn)=>{assert.equal(bridgeListener,fn);removed=true;}};
+ f.overrides.document=document; f.s.running=true; f.s.overlayPause=false;
+ const cleanup=f.run('const handleVisibility = () => setPaused(document.hidden)');
+ listeners.get('visibilitychange')(); assert.equal(f.s.paused,true);
+ bridgeListener({detail:{type:'VKWebAppViewRestore'}});
+ assert.equal(f.s.paused,true,'native restore must not override a still-hidden document');
+ f.run('battleTimer.current = window.setInterval'); assert.equal(f.timers.length,0,'hidden combat cannot schedule damage or enemy progression');
+ document.hidden=false; bridgeListener({detail:{type:'VKWebAppViewRestore'}});
+ assert.equal(f.s.paused,false);
+ f.refs.enemiesRef.current=[{id:55,kind:'wolf',hp:999,maxHp:999,progress:0}];
+ const stopCombat=f.run('battleTimer.current = window.setInterval'); f.tick(420);
+ assert.ok(f.refs.enemiesRef.current[0].progress>0,'visible restore resumes actual production combat');
+ bridgeListener({detail:{type:'VKWebAppViewHide'}}); assert.equal(f.s.paused,true);
+ stopCombat?.(); cleanup(); assert.equal(listeners.size,0); assert.equal(removed,true);
+});
+
 test('continued druzhina default save campaigns1..36 buys all15 earned upgrades and retains, quest claims and reload completion gates', async t=>{
  const f=fixture(),random=Math.random;Math.random=rng(7);const waves=[]; const catalog=new Set(); let cappedSwap=false;
  function inspect(){ for(const unit of f.s.units)if(unit)catalog.add(`${unit.kind}:${unit.level}`); }
