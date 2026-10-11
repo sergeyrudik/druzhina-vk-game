@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
+import { createAdPolicy } from "../app/ad-policy.ts";
 
 import {
   MAX_WAVE,
@@ -9,6 +12,7 @@ import {
   createDefaultSave,
   createWave,
   getCampaignProfile,
+  getLocalDateKey,
   getMaxCastleHp,
   getNextId,
   getRecruitCost,
@@ -24,6 +28,65 @@ import {
   selectNewestSave,
   serializeSave,
 } from "../app/game-engine.ts";
+
+const pageSource = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+const pageTree = ts.createSourceFile("page.tsx", pageSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let rewardedHandler;
+function findRewardedHandler(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(pageTree) === "showRewardedAd") {
+    rewardedHandler = node.initializer;
+  }
+  ts.forEachChild(node, findRewardedHandler);
+}
+findRewardedHandler(pageTree);
+assert.ok(rewardedHandler && ts.isArrowFunction(rewardedHandler));
+const rewardedCode = ts.transpileModule(`return (${rewardedHandler.getText(pageTree)})();`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText;
+
+for (const result of [true, false, undefined, "true", 1, {}, null, "sdk-error"]) {
+  test(`coin reward requires literal SDK success: ${JSON.stringify(result)}`, async () => {
+    const initial = createDefaultSave();
+    let coins = initial.coins;
+    let rewards = structuredClone(initial.rewards);
+    let stats = structuredClone(initial.stats);
+    let calls = 0;
+    const scope = {
+      bridgeRef: { current: { send: async (method) => {
+        if (method === "VKWebAppShowNativeAds") {
+          calls += 1;
+          if (result === "sdk-error") throw new Error("SDK unavailable");
+          return { result };
+        }
+        return {};
+      } } },
+      adBusyRef: { current: false }, interstitialBusyRef: { current: false },
+      adPolicyRef: { current: createAdPolicy({ storageKey: "test:reward", storage: null }) },
+      victory: false, running: false, stats: initial.stats,
+      adBusy: false, rewardBlockedReason: "", wave: 1, campaign: 1, showStart: false,
+      REWARD_COINS: 75, getLocalDateKey,
+      setCoins: (update) => { coins = update(coins); },
+      setRewards: (update) => { rewards = update(rewards); },
+      setStats: (update) => { stats = update(stats); },
+      setAdBusy: () => {}, setAdStatus: () => {}, setAdAvailable: () => {},
+      setClock: () => {}, setMessage: () => {}, playSound: () => {}, trackEvent: () => {},
+      checkRewardAvailability: async () => {}, window: { setTimeout: () => {} },
+    };
+    await Function(...Object.keys(scope), rewardedCode)(...Object.values(scope));
+    assert.equal(calls, 1);
+    assert.equal(scope.adBusyRef.current, false);
+    if (result === true) {
+      assert.equal(coins, initial.coins + 75);
+      assert.equal(rewards.count, initial.rewards.count + 1);
+      assert.equal(stats.adsWatched, initial.stats.adsWatched + 1);
+      assert.ok(rewards.lastRewardAt > 0);
+    } else {
+      assert.equal(coins, initial.coins);
+      assert.deepEqual(rewards, initial.rewards);
+      assert.deepEqual(stats, initial.stats);
+    }
+  });
+}
 
 test("initial units are cloned and have the expected base power", () => {
   const first = cloneInitialUnits();

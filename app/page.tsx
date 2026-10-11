@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import bridge from "@vkontakte/vk-bridge";
+import { createAdPolicy } from "./ad-policy";
 import { createVkBridge } from "./vk-runtime";
 import Link from "next/link";
 import {
@@ -54,7 +55,6 @@ const VK_SAVE_KEY = "druzhina_save";
 const REWARD_COINS = 75;
 const REWARD_COOLDOWN_MS = 3 * 60 * 1000;
 const REWARD_DAILY_LIMIT = 8;
-const INTERSTITIAL_INTERVAL_MS = 3 * 60 * 1000;
 const VK_APP_URL = "https://vk.com/app54694176";
 
 const enemyIcon = { goblin: "👺", wolf: "🐺", troll: "👹" };
@@ -203,6 +203,7 @@ export default function Home() {
   const [adAvailable, setAdAvailable] = useState<boolean | null>(null);
   const [adStatus, setAdStatus] = useState("");
   const [clock, setClock] = useState(0);
+  const [commonRewardWait, setCommonRewardWait] = useState(0);
 
   const nextId = useRef(20);
   const enemiesRef = useRef<Enemy[]>([]);
@@ -210,10 +211,20 @@ export default function Home() {
   const bridgeRef = useRef<VKBridge | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const latestSaveRef = useRef<GameSave>(defaults);
-  const sessionStartedAt = useRef(0);
-  const lastInterstitialAt = useRef(0);
   const adBusyRef = useRef(false);
   const interstitialBusyRef = useRef(false);
+  const boundaryPendingRef = useRef(false);
+  const adPolicyRef = useRef<ReturnType<typeof createAdPolicy> | null>(null);
+  useEffect(() => {
+    if (adPolicyRef.current !== null) return;
+    adPolicyRef.current = createAdPolicy({
+      storageKey: "druzhina:ad-policy:v1",
+      onInterstitialBusyChange: (busy) => {
+        interstitialBusyRef.current = busy;
+        setInterstitialBusy(busy);
+      },
+    });
+  }, []);
   const lastAdCheckAt = useRef(0);
   const battleLootRef = useRef(0);
   const cloudSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -317,6 +328,8 @@ export default function Home() {
   );
 
   const applySave = useCallback((save: GameSave) => {
+    adPolicyRef.current?.seedLastAdAt(save.rewards.lastRewardAt);
+    setCommonRewardWait(adPolicyRef.current?.rewardWaitMs() ?? 0);
     setUnits(save.units);
     setCoins(save.coins);
     setCrystals(save.crystals);
@@ -509,9 +522,11 @@ export default function Home() {
 
   useEffect(() => {
     const now = Date.now();
-    sessionStartedAt.current = now;
     const initialClock = window.setTimeout(() => setClock(now), 0);
-    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
+    const timer = window.setInterval(() => {
+      setClock(Date.now());
+      setCommonRewardWait(adPolicyRef.current?.rewardWaitMs() ?? 0);
+    }, 30_000);
     return () => {
       window.clearTimeout(initialClock);
       window.clearInterval(timer);
@@ -646,6 +661,7 @@ export default function Home() {
 
   const spawnCurrentWave = useCallback(() => {
     if (running || adBusyRef.current || interstitialBusyRef.current || castleHp <= 0 || victory || stats.campaignsWon >= campaign) return;
+    adPolicyRef.current?.startGameplay();
     const spawned = createWave(wave, nextId.current, campaign);
     nextId.current = spawned.nextId;
     battleLootRef.current = 0;
@@ -725,43 +741,16 @@ export default function Home() {
   }, [combatProfile, overlayPause, paused, running, totalPower]);
 
   const maybeShowInterstitial = useCallback(async () => {
-    const now = Date.now();
-    if (
-      interstitialBusyRef.current ||
-      adBusyRef.current ||
-      !bridgeRef.current ||
-      !tutorialDone ||
-      now - sessionStartedAt.current < INTERSTITIAL_INTERVAL_MS ||
-      now - lastInterstitialAt.current < INTERSTITIAL_INTERVAL_MS
-    ) {
-      return;
+    const shown = await adPolicyRef.current!.maybeInterstitial(
+      (method, params) => bridgeRef.current!.send(method, params),
+      Boolean(bridgeRef.current && vkReady && tutorialDone),
+    );
+    if (shown) {
+      setCommonRewardWait(adPolicyRef.current?.rewardWaitMs() ?? 0);
+      trackEvent("interstitial_complete", { wave, campaign });
     }
-    interstitialBusyRef.current = true;
-    setInterstitialBusy(true);
-    try {
-      const check = (await bridgeRef.current.send("VKWebAppCheckNativeAds", {
-        ad_format: "interstitial",
-      })) as { result?: boolean };
-      if (!check.result) {
-        trackEvent("interstitial_unavailable", { wave, campaign });
-        return;
-      }
-      const shown = (await bridgeRef.current.send("VKWebAppShowNativeAds", {
-        ad_format: "interstitial",
-      })) as { result?: boolean };
-      if (shown.result === true) {
-        lastInterstitialAt.current = Date.now();
-        trackEvent("interstitial_complete", { wave, campaign });
-      } else {
-        trackEvent("interstitial_cancelled", { wave, campaign });
-      }
-    } catch {
-      trackEvent("interstitial_error", { wave, campaign });
-    } finally {
-      interstitialBusyRef.current = false;
-      setInterstitialBusy(false);
-    }
-  }, [campaign, trackEvent, tutorialDone, wave]);
+    return shown;
+  }, [campaign, trackEvent, tutorialDone, vkReady, wave]);
 
   useEffect(() => {
     if (!running || enemies.length !== 0) return;
@@ -800,6 +789,7 @@ export default function Home() {
       });
 
       if (wave >= MAX_WAVE) {
+        void maybeShowInterstitial();
         setVictory(true);
         setShowResult(true);
         setCrystals((value) => value + 3);
@@ -809,7 +799,7 @@ export default function Home() {
       } else {
         if (wave % 3 === 0) void maybeShowInterstitial();
         setWave((value) => value + 1);
-        setMessage(`Волна отбита! Получено ${completionReward + earnedLoot} монет.`);
+        setMessage(`Волна отбита! Награда: ${completionReward + earnedLoot} 🪙.`);
         playSound("win");
       }
     }, 260);
@@ -935,7 +925,14 @@ export default function Home() {
     trackEvent("castle_heal", { castle_hp: result.castleHp, wave, campaign });
   };
 
-  const startCampaign = (nextCampaign = campaign) => {
+  const startCampaign = async (nextCampaign = campaign) => {
+    if (boundaryPendingRef.current || adPolicyRef.current?.isBusy()) return;
+    boundaryPendingRef.current = true;
+    try {
+      await maybeShowInterstitial();
+    } finally {
+      boundaryPendingRef.current = false;
+    }
     const freshUnits = cloneInitialUnits();
     setUnits(freshUnits);
     setCoins(getStartingCoins(upgrades.treasury));
@@ -971,6 +968,7 @@ export default function Home() {
   };
 
   const resetAllProgress = () => {
+    if (adPolicyRef.current?.isBusy() || adBusyRef.current || boundaryPendingRef.current) return;
     const fresh = createDefaultSave();
     applySave(fresh);
     setEnemies([]);
@@ -990,17 +988,25 @@ export default function Home() {
   };
 
   const rewardBlockedReason = useMemo(() => {
+    if (running) return "Дождись завершения волны";
+    if (victory || stats.campaignsWon >= campaign) return "Начните следующий поход для получения монет";
     const today = getLocalDateKey();
     const todayCount = rewards.date === today ? rewards.count : 0;
     if (todayCount >= REWARD_DAILY_LIMIT) return "Лимит наград на сегодня исчерпан";
-    const wait = REWARD_COOLDOWN_MS - (clock - rewards.lastRewardAt);
+    const wait = Math.max(REWARD_COOLDOWN_MS - (clock - rewards.lastRewardAt), commonRewardWait);
     if (wait > 0) return `Следующая награда через ${Math.ceil(wait / 60_000)} мин.`;
     if (adAvailable === false) return "Реклама сейчас недоступна";
     return "";
-  }, [adAvailable, clock, rewards]);
+  }, [adAvailable, campaign, clock, commonRewardWait, rewards, running, stats.campaignsWon, victory]);
 
   const showRewardedAd = async () => {
+    if (running) return;
+    if (victory || stats.campaignsWon >= campaign) return;
     if (!bridgeRef.current || adBusyRef.current || interstitialBusyRef.current || adBusy || rewardBlockedReason) return;
+    if (!adPolicyRef.current?.beginReward()) {
+      setAdStatus(`Следующая награда через ${Math.ceil((adPolicyRef.current?.rewardWaitMs() ?? 0) / 60_000)} мин.`);
+      return;
+    }
     adBusyRef.current = true;
     setAdBusy(true);
     setAdStatus("");
@@ -1009,11 +1015,12 @@ export default function Home() {
       const response = (await bridgeRef.current.send("VKWebAppShowNativeAds", {
         ad_format: "reward",
       })) as { result?: boolean };
-      if (!response.result) {
+      if (response.result !== true) {
         setAdStatus("Реклама завершилась без награды");
         trackEvent("reward_incomplete", { wave, campaign });
         return;
       }
+      adPolicyRef.current?.finishReward(true);
       const today = getLocalDateKey();
       setCoins((value) => value + REWARD_COINS);
       setRewards((current) => ({
@@ -1035,6 +1042,7 @@ export default function Home() {
       setAdStatus("Реклама пока недоступна — попробуй позже");
       trackEvent("reward_error", { wave, campaign });
     } finally {
+      adPolicyRef.current?.finishReward(false);
       adBusyRef.current = false;
       setAdBusy(false);
       window.setTimeout(() => void checkRewardAvailability(), 1200);
@@ -1070,7 +1078,7 @@ export default function Home() {
     setCrystals((value) => value - cost);
     setUpgrades((current) => ({ ...current, [key]: current[key] + 1 }));
     if (key === "walls") setCastleHp((value) => value + 10);
-    setMessage(`${UPGRADE_DATA[key].title} улучшена до ${level + 1} уровня`);
+    setMessage(`${UPGRADE_DATA[key].title} ${key === "walls" ? "улучшены" : "улучшена"} до уровня ${level + 1}`);
     playSound("merge");
     trackEvent("camp_upgrade", { upgrade: key, level: level + 1, cost });
   };
@@ -1167,7 +1175,7 @@ export default function Home() {
                   Волна {wave} <span>/ {MAX_WAVE}</span>
                   {(wave === 5 || wave === MAX_WAVE) && <em className="boss-label">БОСС</em>}
                 </h1>
-                <div className="wave-route" aria-label={`Пройдено волн: ${wave - 1} из ${MAX_WAVE}`}>
+                <div className="wave-route" aria-label={`Пройдено волн: ${victory ? MAX_WAVE : wave - 1} из ${MAX_WAVE}`}>
                   {Array.from({ length: MAX_WAVE }, (_, index) => (
                     <i
                       className={`${index + 1 < wave ? "done" : ""} ${index + 1 === wave ? "current" : ""} ${index + 1 === 5 || index + 1 === MAX_WAVE ? "boss" : ""}`}
@@ -1346,7 +1354,7 @@ export default function Home() {
                         : ""}
                 </small>
               </button>
-              {vkReady && (
+              {vkReady && !victory && stats.campaignsWon < campaign && (
                 <button
                   className="rewarded-ad"
                   onClick={showRewardedAd}
@@ -1490,7 +1498,7 @@ export default function Home() {
                 ? `Открыт поход ${campaign + 1} · ${getCampaignProfile(campaign + 1).title}`
                 : `Поход ${campaign} · ${campaignProfile.title} · Волна ${wave} из ${MAX_WAVE}`}
             </p>
-            <button className="start-play" onClick={startOrContinue}>
+            <button className="start-play" onClick={startOrContinue} disabled={adBusy || interstitialBusy}>
               <span>▶</span>
               <b>
                 {!hydrated
@@ -1508,7 +1516,7 @@ export default function Home() {
               <button onClick={() => setShowHelp(true)}><span>📜</span>Как играть</button>
               <button onClick={() => setShowSettings(true)}><span>⚙️</span>Настройки</button>
             </div>
-            {vkReady && tutorialDone && (
+            {vkReady && tutorialDone && !victory && stats.campaignsWon < campaign && (
               <button
                 className="start-ad"
                 onClick={showRewardedAd}
@@ -1519,6 +1527,7 @@ export default function Home() {
               </button>
             )}
             {adStatus && <p className="start-ad-status" role="status">{adStatus}</p>}
+            {interstitialBusy && <p className="start-ad-status" role="status">Загрузка рекламы…</p>}
             <small>Объединяй воинов · Защищай город · Стань легендой</small>
           </div>
         </div>
@@ -1557,8 +1566,8 @@ export default function Home() {
                 ? "Монеты выдаются за волны, задания и добровольный просмотр рекламы."
                 : "Кристаллы выдаются за ежедневные задания и завершённые походы."}
             </p>
-            {showResources === "coins" && vkReady && (
-              <button onClick={() => { setShowResources(null); void showRewardedAd(); }} disabled={Boolean(rewardBlockedReason)}>
+            {showResources === "coins" && vkReady && !victory && stats.campaignsWon < campaign && (
+              <button onClick={() => { setShowResources(null); void showRewardedAd(); }} disabled={running || adBusy || interstitialBusy || Boolean(rewardBlockedReason)}>
                 {rewardBlockedReason || `Смотреть рекламу · +${REWARD_COINS}`}
               </button>
             )}
@@ -1595,7 +1604,8 @@ export default function Home() {
                 : `Дружина и ресурсы сохранены. Стены можно восстановить до 65% и повторить волну ${wave} без полного сброса похода.`}
             </p>
             <div className="result-actions">
-              <button onClick={victory ? () => startCampaign(campaign + 1) : retryCurrentWave}>
+              {interstitialBusy && <p className="ad-status" role="status">Загрузка рекламы…</p>}
+              <button disabled={adBusy || interstitialBusy} onClick={victory ? () => void startCampaign(campaign + 1) : retryCurrentWave}>
                 {victory ? `Начать поход ${campaign + 1}` : `Повторить волну ${wave}`}
               </button>
               <button
