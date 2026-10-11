@@ -1453,7 +1453,7 @@ export default function Home() {
           <div className="stat-grid">
             <article><span>🛡️</span><b>{stats.wavesWon}</b><small>волн отбито</small></article>
             <article><span>⚔️</span><b>{stats.unitsMerged}</b><small>объединений</small></article>
-            <article><span>🏕️</span><b>{stats.campaignsWon}</b><small>походов завершено</small></article>
+            <article><span>🏕️</span><small>Завершено походов:</small><b>{stats.campaignsWon}</b></article>
             <article><span>🎬</span><b>{stats.adsWatched}</b><small>наград получено</small></article>
           </div>
           <div className="social-actions">
