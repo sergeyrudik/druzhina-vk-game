@@ -251,3 +251,50 @@ test(`${game} continued reset of identical defaults still commits a detectable c
  const now=Date.now;Date.now=()=>1800000000000;
  try{const a=fixture(),b=fixture(),w=writers();w.wire(a);w.wire(b);await w.persist(a);const before=w.store.get('test-save');b.refs.saveGuardRef.current.initialize(before);resetAction(a.scope());await w.persist(a);assert.notEqual(w.store.get('test-save'),before,'reset must be distinguishable even within the same millisecond');b.run('const syncFromStorage =');assert.equal(game==='druzhina'?b.s.showStart:!b.s.started,true);}finally{Date.now=now;}
 });
+
+
+for (const phase of ["init-failure", "cloud"]) {
+  for (const change of ["gameplay", "reset"]) {
+    test(`${game}: actual hydrate paused at ${phase} adopts remote ${change} before its first writer`, async () => {
+      const a = fixture(), b = fixture(), w = writers(); w.wire(a); w.wire(b);
+      if (change === "reset") await earn(a);
+      await w.persist(a);
+      const initialRaw = w.store.get("test-save");
+      const initial = w.current();
+      let release, entered = false;
+      const pending = new Promise((resolve, reject) => { release = phase === "init-failure" ? () => reject(new Error("SDK init unavailable")) : resolve; });
+      b.s.hydrated = false;
+      b.overrides.setHydrated = value => { b.s.hydrated = value; };
+      b.overrides.setVkReady = value => { b.s.vkReady = value; };
+      b.overrides.setVkUser = () => {};
+      b.overrides.createVkBridge = value => value;
+      b.overrides.withTimeout = promise => promise;
+      b.overrides.promiseWithTimeout = promise => promise;
+      if (game === "druzhina") b.overrides.readLocalSave = variable("readLocalSave", b.scope(), true);
+      b.overrides.bridge = { send: async method => {
+        if ((phase === "init-failure" && method === "VKWebAppInit") || (phase === "cloud" && method === "VKWebAppStorageGet")) { entered = true; return pending; }
+        return {};
+      } };
+      b.run("VKWebAppInit");
+      for (let i = 0; !entered && i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(entered, true, "production hydration is paused at requested SDK await");
+      if (change === "reset") resetAction(a.scope());
+      else if (game === "sani") a.call("reviveByCoins");
+      else if (game === "druzhina") a.call("buyUnit");
+      else await earn(a);
+      await w.persist(a);
+      const expected = w.current(), committedRaw = w.store.get("test-save");
+      assert.notEqual(committedRaw, initialRaw, "other window committed a genuine production action");
+      if (game === "sani" && change === "gameplay") assert.equal(expected.coins, initial.coins - 12);
+      release({ keys: [{ key: "test-vk-save", value: initialRaw }] });
+      for (let i = 0; !b.s.hydrated && i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(b.s.hydrated, true);
+      const hydrated = game === "druzhina" ? b.s : b.s.save;
+      assert.equal(hydrated.coins, expected.coins, "hydration uses current local wallet, not pre-await state");
+      assert.deepEqual(hydrated.stats, expected.stats, "hydration retains current counters/reset marker");
+      if (game === "druzhina") assert.deepEqual(hydrated.units, expected.units);
+      await w.persist(b);
+      assert.equal(w.store.get("test-save"), committedRaw, "first hydrated writer must not overwrite/re-echo committed state");
+    });
+  }
+}

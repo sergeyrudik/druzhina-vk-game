@@ -393,9 +393,9 @@ export default function Home() {
     [adoptExternalSave, saveRenderRevision, trackEvent],
   );
 
-  const readLocalSave = useCallback(() => {
+  const readLocalSave = useCallback((raw?: string | null) => {
     try {
-      return migrateSave(localStorage.getItem(SAVE_KEY)) ?? migrateSave(localStorage.getItem(LEGACY_SAVE_KEY));
+      return migrateSave(raw === undefined ? localStorage.getItem(SAVE_KEY) : raw) ?? migrateSave(localStorage.getItem(LEGACY_SAVE_KEY));
     } catch {
       return null;
     }
@@ -420,7 +420,6 @@ export default function Home() {
     let cancelled = false;
 
     const hydrate = async () => {
-      const localSave = readLocalSave();
       let cloudSave: GameSave | null = null;
 
       try {
@@ -462,8 +461,12 @@ export default function Home() {
       }
 
       if (cancelled) return;
+      // SDK waits may overlap another tab's purchase or reset. Pair the
+      // selected current local snapshot with the very same guard baseline.
+      const latestRaw = readCurrentRaw();
+      const localSave = readLocalSave(latestRaw);
       const chosen = selectNewestSave(localSave, cloudSave);
-      saveGuardRef.current!.initialize(readCurrentRaw());
+      saveGuardRef.current!.initialize(latestRaw);
       setSaveRenderRevision(saveGuardRef.current!.revision());
       applySave(chosen ?? createDefaultSave());
       setHydrated(true);
