@@ -26,6 +26,7 @@ import {
   healCastle,
   mergeOrMove,
   migrateSave,
+  refreshRewards,
   selectNewestSave,
   serializeSave,
   type DailyProgress,
@@ -954,7 +955,7 @@ export default function Home() {
   };
 
   const retryCurrentWave = () => {
-    setCastleHp(Math.max(1, Math.ceil(maxCastleHp * 0.65)));
+    setCastleHp((value) => Math.min(maxCastleHp, Math.max(value, 1, Math.ceil(maxCastleHp * 0.65))));
     setEnemies([]);
     enemiesRef.current = [];
     battleLootRef.current = 0;
@@ -963,13 +964,13 @@ export default function Home() {
     setDefeat(false);
     setShowResult(false);
     setSelected(units.findIndex(Boolean) >= 0 ? units.findIndex(Boolean) : null);
-    setMessage(`Стены восстановлены до 65%. Дружина готова повторить волну ${wave}.`);
+    setMessage(`Стены готовы. Дружина может повторить волну ${wave}.`);
     trackEvent("wave_retry_ready", { wave, campaign });
   };
 
   const resetAllProgress = () => {
     if (adPolicyRef.current?.isBusy() || adBusyRef.current || boundaryPendingRef.current) return;
-    const fresh = createDefaultSave();
+    const fresh = { ...createDefaultSave(), rewards: refreshRewards(rewards) };
     applySave(fresh);
     setEnemies([]);
     enemiesRef.current = [];
@@ -1348,7 +1349,7 @@ export default function Home() {
                   {victory
                     ? `${getCampaignProfile(campaign + 1).title} ждёт`
                     : defeat || castleHp <= 0
-                      ? "Дружина сохранится · 65% прочности"
+                      ? "Дружина сохранится · не менее 65% прочности"
                       : !running
                         ? `Награда за волну ${getWaveReward(wave, campaign)} 🪙`
                         : ""}
@@ -1601,7 +1602,7 @@ export default function Home() {
             <p>
               {victory
                 ? `Поход ${campaign} завершён. Получено 3 кристалла. Следующая глава — «${getCampaignProfile(campaign + 1).title}», а награды станут ценнее.`
-                : `Дружина и ресурсы сохранены. Стены можно восстановить до 65% и повторить волну ${wave} без полного сброса похода.`}
+                : `Дружина и ресурсы сохранены. Стены можно восстановить не менее чем до 65% и повторить волну ${wave} без полного сброса похода.`}
             </p>
             <div className="result-actions">
               {interstitialBusy && <p className="ad-status" role="status">Загрузка рекламы…</p>}

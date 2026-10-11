@@ -133,6 +133,11 @@ export function getLocalDateKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+export function refreshRewards(rewards: RewardLimits, date = getLocalDateKey()): RewardLimits {
+  if (rewards.date === date) return rewards;
+  return { date, count: 0, lastRewardAt: rewards.lastRewardAt };
+}
+
 export function cloneInitialUnits(): Array<Unit | null> {
   return INITIAL_UNITS.map((unit) => (unit ? { ...unit } : null));
 }
