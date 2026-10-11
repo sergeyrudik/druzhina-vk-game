@@ -29,6 +29,17 @@ import {
   serializeSave,
 } from "../app/game-engine.ts";
 
+// Model the browser atomic Web Lock transport, held until SDK completion.
+// Unsupported/no-lock mode is tested separately in the shared policy suite.
+function testLocks() {
+  let held = false;
+  return { request: async (_name, _options, callback) => {
+    if (held) return callback(null);
+    held = true;
+    try { return await callback({}); } finally { held = false; }
+  } };
+}
+
 const pageSource = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 const pageTree = ts.createSourceFile("page.tsx", pageSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let rewardedHandler;
@@ -65,7 +76,7 @@ for (const result of [true, false, undefined, "true", 1, {}, null, "sdk-error"])
         return {};
       } } },
       adBusyRef: { current: false }, interstitialBusyRef: { current: false },
-      adPolicyRef: { current: createAdPolicy({ storageKey: "test:reward", settle: async()=>{}, storage: (()=>{const m=new Map();return{getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};})() }) },
+      adPolicyRef: { current: createAdPolicy({ locks: testLocks(), storageKey: "test:reward", storage: (()=>{const m=new Map();return{getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};})() }) },
       victory: false, running: false, stats: initial.stats,
       adBusy: false, rewardBlockedReason: "", wave: 1, campaign: 1, showStart: false,
       REWARD_COINS: 75, getLocalDateKey,

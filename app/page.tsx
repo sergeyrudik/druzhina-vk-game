@@ -1060,7 +1060,10 @@ export default function Home() {
     if (victory || stats.campaignsWon >= campaign) return;
     if (!bridgeRef.current || adBusyRef.current || interstitialBusyRef.current || adBusy || rewardBlockedReason) return;
     if (!(await adPolicyRef.current?.beginReward())) {
-      setAdStatus(`Следующая награда через ${Math.ceil((adPolicyRef.current?.rewardWaitMs() ?? 0) / 60_000)} мин.`);
+      const waitMs = adPolicyRef.current?.rewardWaitMs() ?? 0;
+      setAdStatus(waitMs > 0
+        ? `Следующая награда через ${Math.ceil(waitMs / 60_000)} мин.`
+        : "Реклама сейчас недоступна. Попробуйте позже.");
       return;
     }
     adBusyRef.current = true;

@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAdPolicy, AD_INTERVAL_MS, AD_RETRY_MS } from "../app/ad-policy.ts";
 
-function fixture({ storage, onInterstitialBusyChange } = {}) {
+function fixture({ storage, locks = fakeLocks(), onInterstitialBusyChange } = {}) {
   let time = 1_800_000_000_000;
   const values = new Map();
-  const policy = createAdPolicy({ storageKey: "test:last-ad", now: () => time, storage: storage ?? { getItem: key => values.get(key) ?? null, setItem: (key,value) => values.set(key,value) }, settle: async () => {}, locks: null, onInterstitialBusyChange });
+  const policy = createAdPolicy({ storageKey: "test:last-ad", now: () => time, storage: storage ?? { getItem: key => values.get(key) ?? null, setItem: (key,value) => values.set(key,value) }, locks, onInterstitialBusyChange });
   const calls = [];
   const send = async (method) => { calls.push(method); return { result: true }; };
   return { policy, calls, send, advance: (ms) => { time += ms; }, time: () => time };
@@ -38,7 +38,7 @@ test("the first voluntary reward is allowed and suppresses automatic ads for thr
   f.policy.startGameplay();
   assert.equal(await f.policy.beginReward(), true);
   f.advance(61_000); // Video duration must not consume the following cooldown.
-  f.policy.finishReward(true);
+  f.policy.finishReward(true); await new Promise(setImmediate);
   assert.equal(f.policy.rewardWaitMs(), AD_INTERVAL_MS);
   f.advance(AD_INTERVAL_MS - 1);
   assert.equal(await f.policy.maybeInterstitial(f.send, true), false);
@@ -55,14 +55,14 @@ test("an interstitial suppresses rewarded requests as well as further interstiti
   assert.equal(await f.policy.maybeInterstitial(f.send, true), false);
   f.advance(AD_INTERVAL_MS);
   assert.equal(await f.policy.beginReward(), true);
-  f.policy.finishReward(false);
+  f.policy.finishReward(false); await new Promise(setImmediate);
 });
 
 test("a cancelled reward consumes no cooldown and always releases its lock", async () => {
   const f = fixture();
   assert.equal(await f.policy.beginReward(), true);
   assert.equal(await f.policy.beginReward(), false);
-  f.policy.finishReward(false);
+  f.policy.finishReward(false); await new Promise(setImmediate);
   assert.equal(f.policy.rewardWaitMs(), 0);
   assert.equal(f.policy.isBusy(), false);
   assert.equal(await f.policy.beginReward(), true);
@@ -162,6 +162,7 @@ test("SDK errors leave free play unlocked without consuming a successful-ad inte
   f.policy.startGameplay();
   f.advance(AD_INTERVAL_MS);
   assert.equal(await f.policy.maybeInterstitial(async () => { throw new Error("unavailable"); }, true), false);
+  await new Promise(setImmediate);
   assert.equal(f.policy.isBusy(), false);
   assert.equal(await f.policy.beginReward(), true);
 });
@@ -171,8 +172,8 @@ test("the common timestamp survives reload and day rollover; fresh sessions stil
   const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
   const f = fixture({ storage });
   assert.equal(await f.policy.beginReward(), true);
-  f.policy.finishReward(true);
-  const reloaded = createAdPolicy({ storageKey: "test:last-ad", now: f.time, storage, locks: null, settle: async () => {} });
+  f.policy.finishReward(true); await new Promise(setImmediate);
+  const reloaded = createAdPolicy({ storageKey: "test:last-ad", now: f.time, storage, locks: fakeLocks() });
   assert.equal(await reloaded.beginReward(), false);
   f.advance(AD_INTERVAL_MS);
   assert.equal(await reloaded.maybeInterstitial(f.send, true), false);
@@ -194,13 +195,13 @@ test("migrated legacy reward protection survives a game-save reset and reload", 
   const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
   const f = fixture({ storage });
   f.policy.seedLastAdAt(f.time() - 30_000);
-  const reloaded = createAdPolicy({ storageKey: "test:last-ad", now: f.time, storage, locks: null, settle: async () => {} });
+  const reloaded = createAdPolicy({ storageKey: "test:last-ad", now: f.time, storage, locks: fakeLocks() });
   assert.equal(reloaded.rewardWaitMs(), AD_INTERVAL_MS - 30_000);
   assert.equal(await reloaded.beginReward(), false);
 });
 
 test("blocked shared storage without Web Locks declines ads and releases free gameplay", async () => {
-  const f = fixture({ storage: { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } } });
+  const f = fixture({ locks: null, storage: { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } } });
   f.policy.startGameplay(); f.advance(AD_INTERVAL_MS);
   assert.equal(await f.policy.maybeInterstitial(f.send, true), false);
   assert.equal(await f.policy.beginReward(), false); assert.deepEqual(f.calls, []); assert.equal(f.policy.isBusy(), false);
@@ -210,20 +211,25 @@ function fakeLocks() {
  let held=false;
  return { request: async (_key, _options, callback) => { if(held) return callback(null); held=true;try{return await callback({name:"ad"});}finally{held=false;} } };
 }
-for(const locksSupported of [true,false]) test(`two independent policies allow one simultaneous SDK presentation (Web Locks=${locksSupported})`,async()=>{
- const values=new Map();const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};const locks=locksSupported?fakeLocks():null;
- let time=1800000000000;const a=createAdPolicy({storageKey:"cross",storage,locks,settle:async()=>{},now:()=>time}),b=createAdPolicy({storageKey:"cross",storage,locks,settle:async()=>{},now:()=>time});
+test("two independent policies with Web Locks allow one simultaneous SDK presentation",async()=>{
+ const values=new Map();const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};const locks=fakeLocks();
+ let time=1800000000000;const a=createAdPolicy({storageKey:"cross",storage,locks,now:()=>time}),b=createAdPolicy({storageKey:"cross",storage,locks,now:()=>time});
  const granted=await Promise.all([a.beginReward(),b.beginReward()]);assert.equal(granted.filter(Boolean).length,1);const winner=granted[0]?a:b,loser=granted[0]?b:a;
- assert.equal(await loser.beginReward(),false);winner.finishReward(true);await new Promise(setImmediate);assert.equal(await loser.beginReward(),false,"reread common successful timestamp");time+=180000;assert.equal(await loser.beginReward(),true);loser.finishReward(false);
+ assert.equal(await loser.beginReward(),false);winner.finishReward(true);await new Promise(setImmediate);assert.equal(await loser.beginReward(),false);time+=180000;assert.equal(await loser.beginReward(),true);loser.finishReward(false);
+});
+test("two independent policies without Web Locks both decline SDK even with shared storage",async()=>{
+ const values=new Map();let writes=0;const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>{writes++;values.set(key,value);}};
+ const a=createAdPolicy({storageKey:"unsupported",storage,locks:null}),b=createAdPolicy({storageKey:"unsupported",storage,locks:null});assert.deepEqual(await Promise.all([a.beginReward(),b.beginReward()]),[false,false]);assert.equal(a.isBusy(),false);assert.equal(b.isBusy(),false);assert.equal(writes,0);
 });
 test("Web Lock remains held through a long SDK wait and cancellation frees another policy",async()=>{
  const locks=fakeLocks(),storage={getItem:()=>null,setItem:()=>{}};const a=createAdPolicy({storageKey:"hold",locks,storage}),b=createAdPolicy({storageKey:"hold",locks,storage});assert.equal(await a.beginReward(),true);assert.equal(await b.beginReward(),false);a.finishReward(false);await new Promise(setImmediate);assert.equal(await b.beginReward(),true);b.finishReward(false);
 });
-test("fallback lease cancellation releases nonce and a crashed expired lease can be recovered",async()=>{
- let time=1800000000000;const values=new Map([["fallback:lease",JSON.stringify({nonce:"crashed",until:time+1000})]]);const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};const a=createAdPolicy({storageKey:"fallback",storage,locks:null,settle:async()=>{},now:()=>time});assert.equal(await a.beginReward(),false);time+=1001;assert.equal(await a.beginReward(),true);a.finishReward(false);assert.equal(values.get("fallback:lease"),"null");assert.equal(await a.beginReward(),true);a.finishReward(false);
+test("without Web Locks neither advertisement format reaches SDK after three-minute grace",async()=>{
+ let time=1800000000000;let sdk=0;const policy=createAdPolicy({storageKey:"unsupported",storage:{getItem:()=>null,setItem:()=>{}},locks:null,now:()=>time});policy.startGameplay();time+=180000;
+ assert.equal(await policy.beginReward(),false);assert.equal(await policy.maybeInterstitial(async()=>{sdk++;return {result:true};},true),false);assert.equal(sdk,0);assert.equal(policy.isBusy(),false);
 });
-test("fallback nonce readback declines a stolen claim before SDK",async()=>{
- const values=new Map();const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};const a=createAdPolicy({storageKey:"stolen",storage,locks:null,settle:async()=>{values.set("stolen:lease",JSON.stringify({nonce:"another",until:Date.now()+300000}));}});assert.equal(await a.beginReward(),false);assert.equal(a.isBusy(),false);
+test("an expired legacy nonce lease cannot re-enable unsupported native advertisements",async()=>{
+ const values=new Map([["legacy:lease",JSON.stringify({nonce:"expired",until:0})]]);const policy=createAdPolicy({storageKey:"legacy",storage:{getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)},locks:null});assert.equal(await policy.beginReward(),false);assert.equal(policy.isBusy(),false);assert.equal(values.get("legacy:lease"),JSON.stringify({nonce:"expired",until:0}));
 });
 test("shared gate serializes automatic and explicit formats across separate controllers",async()=>{
  const locks=fakeLocks(),values=new Map(),storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};let time=1800000000000;const a=createAdPolicy({storageKey:"formats",locks,storage,now:()=>time}),b=createAdPolicy({storageKey:"formats",locks,storage,now:()=>time});a.startGameplay();time+=180000;let resolve;let requests=0;const interstitial=a.maybeInterstitial(async()=>{requests++;return new Promise(r=>resolve=r);},true);await new Promise(setImmediate);assert.equal(await b.beginReward(),false);resolve({result:false});assert.equal(await interstitial,false);assert.equal(requests,1);await new Promise(setImmediate);assert.equal(await b.beginReward(),true);b.finishReward(false);

@@ -16,7 +16,6 @@ type PolicyOptions = {
   now?: () => number;
   storage?: AdStorage | null;
   locks?: Pick<LockManager, "request"> | null;
-  settle?: () => Promise<void>;
   onInterstitialBusyChange?: (busy: boolean) => void;
 };
 
@@ -58,26 +57,10 @@ export function createAdPolicy(options: PolicyOptions) {
         } catch { resolve(false); }
       });
     }
-    // Unsupported Web Locks: a settled, renewable nonce lease cooperates across
-    // tabs. With no usable shared storage, decline ads rather than overlap SDKs.
-    if (!storage) return false;
-    const key = `${options.storageKey}:lease`;
-    const nonce = `${now()}:${Math.random()}:${Math.random()}`;
-    const read = () => { try { return JSON.parse(storage!.getItem(key) ?? "null") as { nonce: string; until: number } | null; } catch { return null; } };
-    try {
-      const previous = read();
-      if (previous && previous.until > now()) return false;
-      storage.setItem(key, JSON.stringify({ nonce, until: now() + 300_000 }));
-      await (options.settle ? options.settle() : new Promise<void>((resolve) => setTimeout(resolve, 35)));
-      if (read()?.nonce !== nonce) return false;
-      const renew = () => { if (read()?.nonce === nonce) { try { storage!.setItem(key, JSON.stringify({ nonce, until: now() + 300_000 })); } catch { /* Optional. */ } } };
-      const timer = typeof window === "undefined" ? null : setInterval(renew, 30_000);
-      releaseGate = () => {
-        if (timer !== null) clearInterval(timer);
-        if (read()?.nonce === nonce) { try { storage!.setItem(key, "null"); } catch { /* Expiry recovers it. */ } }
-      };
-      return true;
-    } catch { return false; }
+    // No cross-process atomic primitive: never start a native ad. Free gameplay
+    // remains available and busy is released by the caller. A storage nonce
+    // cannot prevent a suspended tab from later overwriting another live lease.
+    return false;
   };
   const release = () => { const finish = releaseGate; releaseGate = null; finish?.(); };
 

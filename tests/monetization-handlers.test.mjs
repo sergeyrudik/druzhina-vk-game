@@ -9,6 +9,17 @@ import { createAdPolicy, AD_INTERVAL_MS } from "../app/ad-policy.ts";
 
 // Copied into each game's tests directory. Execute its real arrow functions,
 // with SDK transport mocked; no copied reward or transition implementation.
+// Model the browser atomic Web Lock transport, held until SDK completion.
+// Unsupported/no-lock mode is tested separately in the shared policy suite.
+function testLocks() {
+  let held = false;
+  return { request: async (_name, _options, callback) => {
+    if (held) return callback(null);
+    held = true;
+    try { return await callback({}); } finally { held = false; }
+  } };
+}
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const game = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name.replace("-vk-game", "");
 const source = ts.createSourceFile("page.tsx", fs.readFileSync(path.join(root, "app/page.tsx"), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -44,7 +55,7 @@ function actualEffect(fragment, scope) {
   return Function(...Object.keys(scope), `${code}\nreturn invoke;`)(...Object.values(scope));
 }
 
-function fixture({ response = true, throws = false, lives = 3, completed = false, deferred = false, ready = true } = {}) {
+function fixture({ response = true, throws = false, lives = 3, completed = false, deferred = false, ready = true, locks = testLocks() } = {}) {
   let clock = 1_800_000_000_000;
   const state = { ...engine.createDefaultSave(), running: false, victory: completed, interstitialBusy: false, messages: [], events: [] };
   if (game === "traktir") { state.lives = lives; state.score = 500; }
@@ -54,7 +65,7 @@ function fixture({ response = true, throws = false, lives = 3, completed = false
   const calls = [];
   let resolveShow;
   const storage = new Map();
-  const policy = createAdPolicy({ settle: async()=>{}, storageKey: "handler-test", now: () => clock,
+  const policy = createAdPolicy({ locks, storageKey: "handler-test", now: () => clock,
     storage: { getItem: (k) => storage.get(k) ?? null, setItem: (k,v) => storage.set(k,v) },
     onInterstitialBusyChange: (v) => { state.interstitialBusy = v; },
   });
@@ -315,3 +326,25 @@ if (game === "sani") {
     assert.equal(f.state.running, true);
   });
 }
+
+
+test(`${game}: unsupported Web Locks refuses ads honestly and leaves the next round free`, async () => {
+  const f = fixture({ locks: null });
+  await f.reward();
+  assert.equal(f.calls.length, 0, "no SDK without atomic presentation lock");
+  assert.deepEqual(f.state.rewards, f.original.rewards);
+  assert.deepEqual(f.state.stats, f.original.stats);
+  assert.equal(f.state.coins, f.original.coins);
+  if (game === "traktir") assert.equal(f.state.lives, 3);
+  assert.equal(f.policy.isBusy(), false);
+  assert.equal(f.policy.rewardWaitMs(), 0);
+  assert.ok(f.state.messages.includes("Реклама сейчас недоступна. Попробуйте позже."));
+  assert.doesNotMatch(f.state.messages.join(" "), /через 0 мин/);
+  f.policy.startGameplay(); f.advance(AD_INTERVAL_MS);
+  await f.boundary();
+  assert.equal(f.calls.length, 0, "unsupported interstitial also leaves free play available");
+  assert.equal(f.policy.isBusy(), false);
+  if (game === "sani") assert.equal(f.state.running, true);
+  if (game === "traktir") { assert.equal(f.state.lives, 3); assert.equal(f.state.score, 0); }
+  if (game === "druzhina") { assert.equal(f.state.campaign, 2); assert.equal(f.state.wave, 1); }
+});

@@ -9,6 +9,17 @@ import { createAdPolicy, AD_INTERVAL_MS } from "../app/ad-policy.ts";
 
 // Exercise the production event/effect bodies. Fake scheduling and local state
 // are unit-logic evidence, not a browser/React/native VK certification.
+// Model the browser atomic Web Lock transport, held until SDK completion.
+// Unsupported/no-lock mode is tested separately in the shared policy suite.
+function testLocks() {
+  let held = false;
+  return { request: async (_name, _options, callback) => {
+    if (held) return callback(null);
+    held = true;
+    try { return await callback({}); } finally { held = false; }
+  } };
+}
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const game = JSON.parse(fs.readFileSync(path.join(root, "package.json"))).name.replace("-vk-game", "");
 const source = ts.createSourceFile("page.tsx", fs.readFileSync(path.join(root, "app/page.tsx"), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -134,7 +145,7 @@ for (const count of [3, 8]) {
     f.s.coins = 777; f.s.save.coins = 777;
     let clock = now;
     const storage = new Map(); const calls = [];
-    f.refs.adPolicyRef.current = createAdPolicy({ settle: async()=>{}, storageKey: "gameplay-reset-quota", now: () => clock,
+    f.refs.adPolicyRef.current = createAdPolicy({ locks: testLocks(), storageKey: "gameplay-reset-quota", now: () => clock,
       storage: { getItem: k => storage.get(k) ?? null, setItem: (k,v) => storage.set(k,v) } });
     f.refs.adPolicyRef.current.seedLastAdAt(earned.lastRewardAt);
     f.refs.bridgeRef.current = { send: async (method) => { calls.push(method); return { result: true }; } };
@@ -170,7 +181,7 @@ test(`${game} actual ninth reward stays SDK-blocked after reset with elapsed com
   f.s.rewards = { ...rewards }; f.s.save.rewards = { ...rewards };
   f.s.vkReady = true; f.s.adAvailable = true; f.s.clock = now + AD_INTERVAL_MS;
   f.refs.bridgeRef.current = { send: async method => { calls.push(method); return { result: true }; } };
-  f.refs.adPolicyRef.current = createAdPolicy({ settle: async()=>{}, storageKey: "ninth-reset-test", now: () => now + AD_INTERVAL_MS,
+  f.refs.adPolicyRef.current = createAdPolicy({ locks: testLocks(), storageKey: "ninth-reset-test", now: () => now + AD_INTERVAL_MS,
     storage: { getItem: () => null, setItem() {} } });
   f.refs.adPolicyRef.current.seedLastAdAt(rewards.lastRewardAt);
   resetAction(f.scope());
